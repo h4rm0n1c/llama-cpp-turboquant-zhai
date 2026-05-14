@@ -128,22 +128,25 @@ def dpct(new, old):
 
 
 print(f"{B}Result{R}")
-print(f"  {'k_extra':<10}{'post-kurt':<14}{'KS':<10}{'MSE':<14}{'Δ MSE %':<11}{'KL mean':<14}{'Δ KL %':<11}{'catastrophic':<14}")
-print(f"  {DIM}{'-'*98}{R}")
-def pct(v):  # format as e.g. "+141.7%" right-padded
+def pct(v):
     return f"{v:+.1f}%"
 
-print(f"  {GREEN}{'0  baseline':<10}{R}  {kurt0:<+12.3f}{kspos0:<10.3f}{m0:<14.3e}{'—':<11}{kl0.mean():<14.3e}{'—':<11}{GREEN}{c0:<14.1%}{R}")
-print(f"  {RED}{'1  +1 RHT':<10}{R}  {kurt1:<+12.3f}{kspos1:<10.3f}{m1:<14.3e}{RED}{pct(dpct(m1,m0)):<11}{R}{kl1.mean():<14.3e}{RED}{pct(dpct(kl1.mean(),kl0.mean())):<11}{R}{RED}{B}{c1:<14.1%}{R}")
-print(f"  {RED}{'2  +2 RHT':<10}{R}  {kurt2:<+12.3f}{kspos2:<10.3f}{m2:<14.3e}{RED}{pct(dpct(m2,m0)):<11}{R}{kl2.mean():<14.3e}{RED}{pct(dpct(kl2.mean(),kl0.mean())):<11}{R}{RED}{c2:<14.1%}{R}")
+# Column widths chosen so % values sit visibly inside their own cell with
+# clear whitespace before the next column. Easier to read at screencap zoom.
+print(f"  {'k_extra':<13}{'post-kurt':<13}{'KS':<10}{'MSE':<14}{'Δ MSE %':<13}{'KL mean':<14}{'Δ KL %':<13}{'catastrophic':<14}")
+print(f"  {DIM}{'-'*104}{R}")
+print(f"  {GREEN}{'0  baseline':<13}{R}{kurt0:<+13.3f}{kspos0:<10.3f}{m0:<14.3e}{'—':<13}{kl0.mean():<14.3e}{'—':<13}{GREEN}{c0:<14.1%}{R}")
+print(f"  {RED}{'1  +1 RHT':<13}{R}{kurt1:<+13.3f}{kspos1:<10.3f}{m1:<14.3e}{RED}{pct(dpct(m1,m0)):<13}{R}{kl1.mean():<14.3e}{RED}{pct(dpct(kl1.mean(),kl0.mean())):<13}{R}{RED}{B}{c1:<14.1%}{R}")
+print(f"  {RED}{'2  +2 RHT':<13}{R}{kurt2:<+13.3f}{kspos2:<10.3f}{m2:<14.3e}{RED}{pct(dpct(m2,m0)):<13}{R}{kl2.mean():<14.3e}{RED}{pct(dpct(kl2.mean(),kl0.mean())):<13}{R}{RED}{c2:<14.1%}{R}")
 print()
 print(f"  {B}{RED}catastrophic rate: {c0:.1%}  →  {c1:.1%}{R}  {DIM}(per-query KL > 1.10 × baseline median){R}")
 print()
 print(f"{B}Mechanism{R}")
 print(f"  Consistent with theorem direction: marginal moves toward Gaussian/URR target")
 print(f"  (kurt {kurt0:+.2f} → {kurt1:+.2f}, KS {kspos0:.3f} → {kspos1:.3f}).")
-print(f"  Application to this KV-cache setup fails: production turbo4 centroids extend to")
-print(f"  ±0.174 ≈ ±2σ, matching the real post-WHT K shape: bounded / sub-Gaussian.")
+print(f"  Extra-RHT application fails for this KV-cache setup: production turbo4")
+print(f"  centroids extend to ±0.174 ≈ ±2σ, matching the real post-WHT K shape:")
+print(f"  bounded / sub-Gaussian.")
 print(f"  +RHT Gaussianizes the marginal → mass past ±2σ → saturation at the codebook")
 print(f"  extreme → 100% catastrophic on the attention-softmax KL proxy.")
 print()
