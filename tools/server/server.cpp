@@ -340,6 +340,12 @@ int main(int argc, char ** argv) {
         std::thread monitor_thread;
         if (server_models::is_child_server()) {
             json model_info = routes.get_model_info();
+            // Attach per-device VRAM breakdown so the router can expose it via
+            // /v1/models without requiring host-side nvidia-smi queries.
+            auto * ll_ctx_info = ctx_server.get_llama_context();
+            if (ll_ctx_info != nullptr) {
+                model_info["memory"] = common_memory_breakdown_json(ll_ctx_info);
+            }
             monitor_thread = server_models::setup_child_server(shutdown_handler, model_info);
         }
 

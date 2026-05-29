@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ggml.h"
+#include "nlohmann/json.hpp"
 
 enum common_params_fit_status {
     COMMON_PARAMS_FIT_STATUS_SUCCESS = 0, // found allocations that are projected to fit
@@ -30,3 +31,8 @@ void common_fit_print(
                 struct llama_context_params * cparams);
 
 void common_memory_breakdown_print(const struct llama_context * ctx);
+
+// Return per-device VRAM breakdown as JSON for HTTP responses.
+// Keys per GPU entry: name, total_bytes, free_bytes, model_bytes, kv_bytes, compute_bytes.
+// Host keys: host_model_bytes, host_kv_bytes, host_compute_bytes.
+nlohmann::json common_memory_breakdown_json(const struct llama_context * ctx);
