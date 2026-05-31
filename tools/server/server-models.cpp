@@ -301,9 +301,13 @@ void server_models::load_models() {
             final_presets[name] = custom;
         }
     }
-    // server base preset from CLI args takes highest precedence
+    // Per-model custom presets override base CLI args.
+    // This allows models-preset.ini sections to override server-wide flags
+    // like --reasoning, --cache-type-k, --tensor-split per-model.
     for (auto & [name, preset] : final_presets) {
-        preset.merge(base_preset);
+        auto merged = base_preset;
+        merged.merge(preset);  // custom overrides base
+        preset = merged;
     }
 
     // Helpers that read `mapping` — must be called while holding the lock.
