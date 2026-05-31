@@ -314,7 +314,7 @@ int llama_server(int argc, char ** argv) {
             if (ctx_http.thread.joinable()) {
                 ctx_http.thread.join();
             }
-            SRV_ERR("exiting due to model loading error\n");
+            SRV_ERR("%s", "exiting due to model loading error");
             return 1;
         }
 
