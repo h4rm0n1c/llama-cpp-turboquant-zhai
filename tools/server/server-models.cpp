@@ -1083,9 +1083,13 @@ std::thread server_models::setup_child_server(const std::function<void(int)> & s
     // send a notification to the router server that a model instance is ready
     common_log_pause(common_log_main());
     fflush(stdout);
-    fprintf(stdout, "%s\n", CMD_CHILD_TO_ROUTER_READY);
-    fflush(stdout);
+    // Send INFO (VRAM breakdown, model metadata) BEFORE READY so the router
+    // has all the data when the model transitions to loaded. The /v1/models
+    // endpoint merges loaded_info into the response — if INFO arrives after
+    // READY, callers see an empty loaded_info despite the model being loaded.
     fprintf(stdout, "%s%s\n", CMD_CHILD_TO_ROUTER_INFO, safe_json_to_str(model_info).c_str());
+    fflush(stdout);
+    fprintf(stdout, "%s\n", CMD_CHILD_TO_ROUTER_READY);
     fflush(stdout);
     common_log_resume(common_log_main());
 
