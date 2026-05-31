@@ -2,6 +2,11 @@
 
 #include "ggml.h"
 #include "nlohmann/json.hpp"
+#include "ggml-backend.h"
+#include "llama.h"
+#include "../src/llama-ext.h"
+
+#include <vector>
 
 enum common_params_fit_status {
     COMMON_PARAMS_FIT_STATUS_SUCCESS = 0, // found allocations that are projected to fit
@@ -33,6 +38,15 @@ void common_fit_print(
 void common_memory_breakdown_print(const struct llama_context * ctx);
 
 // Return per-device VRAM breakdown as JSON for HTTP responses.
-// Keys per GPU entry: name, total_bytes, free_bytes, model_bytes, kv_bytes, compute_bytes.
-// Host keys: host_model_bytes, host_kv_bytes, host_compute_bytes.
 nlohmann::json common_memory_breakdown_json(const struct llama_context * ctx);
+
+// Load a model + context with no_alloc and return the per-device memory breakdown.
+std::vector<llama_device_memory_data> common_get_device_memory_data(
+                                  const char   * path_model,
+        const struct llama_model_params         * mparams,
+        const struct llama_context_params       * cparams,
+        std::vector<ggml_backend_dev_t>         & devs,
+                                      uint32_t  & hp_ngl,
+                                      uint32_t  & hp_n_ctx_train,
+                                      uint32_t  & hp_n_expert,
+                           enum ggml_log_level    log_level);
