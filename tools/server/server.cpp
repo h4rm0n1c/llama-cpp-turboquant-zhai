@@ -292,11 +292,41 @@ int llama_server(int argc, char ** argv) {
         }
 
         if (!ctx_server.load_model(params)) {
+            // Report structured error to parent before exiting.
+            // Gather available diagnostics: device VRAM, model file info.
+            nlohmann::json err_info = {
+                {"model", params.model.path},
+                {"file_size_bytes", (int64_t)std::filesystem::file_size(params.model.path)},
+            };
+            nlohmann::json devs = nlohmann::json::array();
+            for (int i = 0; i < ggml_backend_dev_count(); i++) {
+                ggml_backend_dev_t dev = ggml_backend_dev_get(i);
+                const char * name = ggml_backend_dev_name(dev);
+                size_t free_bytes = 0, total_bytes = 0;
+                ggml_backend_dev_memory(dev, &free_bytes, &total_bytes);
+                devs.push_back({
+                    {"name",        name},
+                    {"total_bytes", (int64_t)total_bytes},
+                    {"free_bytes",  (int64_t)free_bytes},
+                });
+            }
+            err_info["devices"] = devs;
+            err_info["n_ctx"] = (int64_t)params.n_ctx;
+            err_info["n_gpu_layers"] = (int64_t)params.n_gpu_layers;
+            err_info["n_parallel"] = (int64_t)params.n_parallel;
+            err_info["kv_unified"] = params.kv_unified;
+            // KV cache estimate: 2 (K+V) * n_ctx * n_layers * head_dim * kv_heads * sizeof(float16)
+            err_info["kv_estimate_bytes"] = (int64_t)2 * params.n_ctx * params.n_parallel * 4096 * 8 * 2;
+
+            std::string err_str = safe_json_to_str(err_info);
+            fprintf(stdout, "%s%s\n", CMD_CHILD_TO_ROUTER_ERROR, err_str.c_str());
+            fflush(stdout);
+
             clean_up();
             if (ctx_http.thread.joinable()) {
                 ctx_http.thread.join();
             }
-            SRV_ERR("%s", "exiting due to model loading error\n");
+            SRV_ERR("exiting due to model loading error\n");
             return 1;
         }
 

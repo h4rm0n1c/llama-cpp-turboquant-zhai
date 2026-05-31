@@ -42,10 +42,11 @@ extern char **environ;
 
 #define DEFAULT_STOP_TIMEOUT 10 // seconds
 
-#define CMD_ROUTER_TO_CHILD_EXIT  "cmd_router_to_child:exit"
-#define CMD_CHILD_TO_ROUTER_READY "cmd_child_to_router:ready" // also sent when waking up from sleep
-#define CMD_CHILD_TO_ROUTER_SLEEP "cmd_child_to_router:sleep"
-#define CMD_CHILD_TO_ROUTER_INFO  "cmd_child_to_router:info:" // followed by json string
+#define CMD_ROUTER_TO_CHILD_EXIT   "cmd_router_to_child:exit"
+#define CMD_CHILD_TO_ROUTER_READY  "cmd_child_to_router:ready" // also sent when waking up from sleep
+#define CMD_CHILD_TO_ROUTER_SLEEP  "cmd_child_to_router:sleep"
+#define CMD_CHILD_TO_ROUTER_INFO   "cmd_child_to_router:info:" // followed by json string
+#define CMD_CHILD_TO_ROUTER_ERROR  "cmd_child_to_router:error:" // followed by json with error details
 
 // address for child process, this is needed because router may run on 0.0.0.0
 // ref: https://github.com/ggml-org/llama.cpp/issues/17862
@@ -817,6 +818,11 @@ void server_models::load(const std::string & name) {
                     std::string str(buffer);
                     if (string_starts_with(buffer, CMD_CHILD_TO_ROUTER_READY)) {
                         this->update_status(name, SERVER_MODEL_STATUS_LOADED, 0);
+                    } else if (string_starts_with(buffer, CMD_CHILD_TO_ROUTER_ERROR)) {
+                        // Child reported a structured error (e.g. CUDA OOM, unsupported arch).
+                        // Log it and transition to UNLOADED — avoids getting stuck in LOADING.
+                        SRV_ERR("model name=%s loading error: %s\n", name.c_str(), buffer);
+                        this->update_status(name, SERVER_MODEL_STATUS_UNLOADED, 1);
                     } else if (string_starts_with(buffer, CMD_CHILD_TO_ROUTER_INFO)) {
                         this->update_loaded_info(name, str);
                     } else if (string_starts_with(buffer, CMD_CHILD_TO_ROUTER_SLEEP)) {
