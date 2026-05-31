@@ -294,7 +294,21 @@ int llama_server(int argc, char ** argv) {
         if (!ctx_server.load_model(params)) {
             // Signal the parent that loading failed so it can transition to
             // UNLOADED instead of staying stuck in LOADING forever.
-            fprintf(stdout, "%s%s\n", CMD_CHILD_TO_ROUTER_ERROR, "model load failed");
+            // Check for a pending CUDA error — CUDA_CHECK macros log the
+            // error but don't propagate it, so cudaGetLastError still has it.
+            std::string err_reason = "model load failed";
+            {   // avoid including CUDA headers — these are in CUDA runtime API
+                typedef int cudaError_t;
+                extern cudaError_t cudaGetLastError(void);
+                extern const char * cudaGetErrorString(cudaError_t);
+                cudaError_t ce = cudaGetLastError();
+                if (ce != 0) {
+                    err_reason += " (cuda: ";
+                    err_reason += cudaGetErrorString(ce);
+                    err_reason += ")";
+                }
+            }
+            fprintf(stdout, "%s%s\n", CMD_CHILD_TO_ROUTER_ERROR, err_reason.c_str());
             fflush(stdout);
             clean_up();
             if (ctx_http.thread.joinable()) {

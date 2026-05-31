@@ -1003,11 +1003,16 @@ static enum ggml_status ggml_backend_cuda_split_buffer_init_tensor(ggml_backend_
             size += ggml_row_size(tensor->type, MATRIX_ROW_PADDING - ne0 % MATRIX_ROW_PADDING);
         }
 
-        // FIXME: do not crash if cudaMalloc fails
-        // currently, init_tensor cannot fail, it needs to be fixed in ggml-backend first
         ggml_cuda_set_device(id);
         char * buf;
-        CUDA_CHECK(ggml_cuda_device_malloc((void**)&buf, size, id));
+        {
+            auto _err = ggml_cuda_device_malloc((void**)&buf, size, id);
+            if (_err != cudaSuccess) {
+                GGML_LOG_ERROR("%s: cudaMalloc failed for tensor %s on device %d (%.2f MiB)\n",
+                    __func__, tensor->name, id, size / 1024.0 / 1024.0);
+                return GGML_STATUS_ALLOC_FAILED;
+            }
+        }
 
         // set padding to 0 to avoid possible NaN values
         if (size > original_size) {
