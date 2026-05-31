@@ -3035,6 +3035,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_TIMEOUT"));
     add_opt(common_arg(
+        {"--model-load-timeout"}, "N",
+        string_format("max seconds to wait for model to load (default: %d)", params.model_load_timeout),
+        [](common_params & params, int value) {
+            params.model_load_timeout = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_MODEL_LOAD_TIMEOUT"));
+    add_opt(common_arg(
         {"--threads-http"}, "N",
         string_format("number of threads used to process HTTP requests (default: %d)", params.n_threads_http),
         [](common_params & params, int value) {

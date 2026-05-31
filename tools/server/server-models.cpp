@@ -992,8 +992,12 @@ void server_models::update_loaded_info(const std::string & name, std::string & r
 }
 
 void server_models::wait_until_loading_finished(const std::string & name) {
+    int timeout_sec = base_params.model_load_timeout;
+    if (timeout_sec < 1) {
+        timeout_sec = 300; // safety floor
+    }
     std::unique_lock<std::mutex> lk(mutex);
-    if (!cv.wait_for(lk, std::chrono::seconds(300), [this, &name]() {
+    if (!cv.wait_for(lk, std::chrono::seconds(timeout_sec), [this, &name]() {
         auto it = mapping.find(name);
         if (it != mapping.end()) {
             return it->second.meta.status != SERVER_MODEL_STATUS_LOADING;
@@ -1002,7 +1006,7 @@ void server_models::wait_until_loading_finished(const std::string & name) {
     })) {
         // Timeout — model loading hung. Transition to UNLOADED so the state
         // machine can recover instead of being permanently stuck in LOADING.
-        SRV_WRN("model name=%s loading timed out after 300s, marking unloaded\n", name.c_str());
+        SRV_WRN("model name=%s loading timed out after %ds, marking unloaded\n", name.c_str(), timeout_sec);
         auto it = mapping.find(name);
         if (it != mapping.end()) {
             it->second.meta.status = SERVER_MODEL_STATUS_UNLOADED;
