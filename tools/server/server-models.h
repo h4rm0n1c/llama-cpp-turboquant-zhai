@@ -89,6 +89,17 @@ struct server_model_meta {
         return status == SERVER_MODEL_STATUS_UNLOADED && exit_code != 0;
     }
 
+    // true when the child was killed by a signal (e.g. SIGABRT from OOM,
+    // SIGTERM from force-kill).  exit_code is the negated signal number.
+    bool is_signaled() const {
+        return status == SERVER_MODEL_STATUS_UNLOADED && exit_code < 0;
+    }
+
+    // the signal number if is_signaled(), 0 otherwise
+    int exit_signal() const {
+        return is_signaled() ? -exit_code : 0;
+    }
+
     void update_args(common_preset_context & ctx_presets, std::string bin_path);
     void update_caps();
 };
