@@ -827,6 +827,19 @@ void server_models::load(const std::string & name) {
                         this->update_status(name, SERVER_MODEL_STATUS_SLEEPING, 0);
                     }
                 }
+                if (feof(stdout_file)) {
+                    // EOF on stdout — child process exited (could be a crash).
+                    // Immediately mark as UNLOADED so /v1/models stops advertising
+                    // this model as "loaded". Without this, a silent child death
+                    // (e.g. SIGABRT from CUDA OOM) leaves a zombie slot: the router
+                    // still shows "loaded" even though no process is running, and
+                    // subsequent requests either hang or fail with confusing errors.
+                    this->update_status(name, SERVER_MODEL_STATUS_UNLOADED, 1);
+                } else if (ferror(stdout_file)) {
+                    // Read error on stdout (not EOF).  Log and fall through;
+                    // the child may still be alive, so don't change status.
+                    SRV_ERR("read error on stdout for model name=%s\n", name.c_str());
+                }
             } else {
                 SRV_ERR("failed to get stdout/stderr of child process for name=%s\n", name.c_str());
             }
@@ -888,7 +901,17 @@ void server_models::load(const std::string & name) {
 
         // get the exit code
         int exit_code = 0;
-        subprocess_join(child_proc.get(), &exit_code);
+        if (child_proc->child != 0) {
+            subprocess_join(child_proc.get(), &exit_code);
+        } else {
+            // subprocess_alive in the stopping thread already reaped the child
+            // (via waitpid WNOHANG) and cleared process->child.  Calling
+            // subprocess_join with child==0 would waitpid(0, ...) on ANY
+            // process-group child — the wrong child or (if none remain) ECHILD
+            // with exit_code stuck at 0, masking the crash as a clean exit.
+            // Use the cached return_status instead.
+            exit_code = child_proc->return_status;
+        }
         subprocess_destroy(child_proc.get());
 
         // update status and exit code
