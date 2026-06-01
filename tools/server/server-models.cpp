@@ -821,6 +821,12 @@ void server_models::load(const std::string & name) {
                         // Log it and transition to UNLOADED — avoids getting stuck in LOADING.
                         SRV_ERR("model name=%s loading error: %s\n", name.c_str(), buffer);
                         this->update_status(name, SERVER_MODEL_STATUS_UNLOADED, 1);
+                        // Store the error message text after the CMD prefix
+                        std::string err_msg(buffer);
+                        size_t prefix_len = strlen(CMD_CHILD_TO_ROUTER_ERROR);
+                        if (err_msg.size() > prefix_len) {
+                            this->update_last_error(name, err_msg.substr(prefix_len));
+                        }
                     } else if (string_starts_with(buffer, CMD_CHILD_TO_ROUTER_INFO)) {
                         this->update_loaded_info(name, str);
                     } else if (string_starts_with(buffer, CMD_CHILD_TO_ROUTER_SLEEP)) {
@@ -1010,6 +1016,14 @@ void server_models::update_loaded_info(const std::string & name, std::string & r
         meta.loaded_info = info;
     }
     cv.notify_all();
+}
+
+void server_models::update_last_error(const std::string & name, const std::string & error) {
+    std::unique_lock<std::mutex> lk(mutex);
+    auto it = mapping.find(name);
+    if (it != mapping.end()) {
+        it->second.meta.last_error = error;
+    }
 }
 
 void server_models::wait_until_loading_finished(const std::string & name) {
@@ -1298,6 +1312,9 @@ void server_models_routes::init_routes() {
                     // negative exit_code encodes the killing signal
                     status["exit_signal"] = -meta.exit_code;
                 }
+            }
+            if (!meta.last_error.empty()) {
+                status["last_error"] = meta.last_error;
             }
 
             // pi coding agent multimodal compatibility
