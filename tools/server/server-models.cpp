@@ -822,10 +822,15 @@ void server_models::load(const std::string & name) {
                         SRV_ERR("model name=%s loading error: %s\n", name.c_str(), buffer);
                         this->update_status(name, SERVER_MODEL_STATUS_UNLOADED, 1);
                         // Store the error message text after the CMD prefix
+                        // (fgets includes trailing newline — strip it)
                         std::string err_msg(buffer);
                         size_t prefix_len = strlen(CMD_CHILD_TO_ROUTER_ERROR);
                         if (err_msg.size() > prefix_len) {
-                            this->update_last_error(name, err_msg.substr(prefix_len));
+                            auto trimmed = err_msg.substr(prefix_len);
+                            while (!trimmed.empty() && (trimmed.back() == '\n' || trimmed.back() == '\r')) {
+                                trimmed.pop_back();
+                            }
+                            this->update_last_error(name, trimmed);
                         }
                     } else if (string_starts_with(buffer, CMD_CHILD_TO_ROUTER_INFO)) {
                         this->update_loaded_info(name, str);
@@ -1040,13 +1045,17 @@ void server_models::wait_until_loading_finished(const std::string & name) {
         return false;
     })) {
         // Timeout — model loading hung. Transition to UNLOADED with exit_code=1
-        // so is_failed() correctly reports it as failed (the timeout handler
-        // previously set status directly without touching exit_code, making
-        // is_failed() return false and ensure_model_ready report success for
-        // a dead model).  Use update_status() to atomically set both fields
-        // and notify any condition variable waiters.
+        // so is_failed() correctly reports it as failed.  The lock is already
+        // held (from cv.wait_for at the top of this function), so we must NOT
+        // call update_status() which re-acquires it — deadlock.  Write both
+        // fields directly and notify waiters under the held lock.
         SRV_WRN("model name=%s loading timed out after %ds, marking unloaded\n", name.c_str(), timeout_sec);
-        update_status(name, SERVER_MODEL_STATUS_UNLOADED, 1);
+        auto it = mapping.find(name);
+        if (it != mapping.end()) {
+            it->second.meta.status    = SERVER_MODEL_STATUS_UNLOADED;
+            it->second.meta.exit_code = 1;
+        }
+        cv.notify_all();
     }
 }
 

@@ -75,8 +75,8 @@ struct server_model_meta {
     int exit_code = 0; // exit code of the model instance process (only valid if status == FAILED)
     int stop_timeout = 0; // seconds to wait before force-killing the model instance during shutdown
     mtmd_caps multimodal; // multimodal capabilities
-    std::string last_error; // human-readable error message from CMD_CHILD_TO_ROUTER_ERROR or GGML_ABORT
     bool need_download = false; // whether the model needs to be downloaded before loading
+    std::string last_error; // human-readable error message from CMD_CHILD_TO_ROUTER_ERROR or GGML_ABORT
 
     bool is_ready() const {
         return status == SERVER_MODEL_STATUS_LOADED;
