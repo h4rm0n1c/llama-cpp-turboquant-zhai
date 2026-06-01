@@ -1025,13 +1025,14 @@ void server_models::wait_until_loading_finished(const std::string & name) {
         }
         return false;
     })) {
-        // Timeout — model loading hung. Transition to UNLOADED so the state
-        // machine can recover instead of being permanently stuck in LOADING.
+        // Timeout — model loading hung. Transition to UNLOADED with exit_code=1
+        // so is_failed() correctly reports it as failed (the timeout handler
+        // previously set status directly without touching exit_code, making
+        // is_failed() return false and ensure_model_ready report success for
+        // a dead model).  Use update_status() to atomically set both fields
+        // and notify any condition variable waiters.
         SRV_WRN("model name=%s loading timed out after %ds, marking unloaded\n", name.c_str(), timeout_sec);
-        auto it = mapping.find(name);
-        if (it != mapping.end()) {
-            it->second.meta.status = SERVER_MODEL_STATUS_UNLOADED;
-        }
+        update_status(name, SERVER_MODEL_STATUS_UNLOADED, 1);
     }
 }
 
