@@ -77,6 +77,8 @@ struct server_model_meta {
     mtmd_caps multimodal; // multimodal capabilities
     bool need_download = false; // whether the model needs to be downloaded before loading
     std::string last_error; // human-readable error message from CMD_CHILD_TO_ROUTER_ERROR or GGML_ABORT
+    bool recovering = false; // model crashed, will auto-reload on next request
+    int reload_attempts = 0; // consecutive auto-reload attempts (resets on successful load)
 
     bool is_ready() const {
         return status == SERVER_MODEL_STATUS_LOADED;
@@ -87,7 +89,7 @@ struct server_model_meta {
     }
 
     bool is_failed() const {
-        return status == SERVER_MODEL_STATUS_UNLOADED && exit_code != 0;
+        return status == SERVER_MODEL_STATUS_UNLOADED && exit_code != 0 && !recovering;
     }
 
     // true when the child was killed by a signal (e.g. SIGABRT from OOM,
@@ -100,6 +102,9 @@ struct server_model_meta {
     int exit_signal() const {
         return is_signaled() ? -exit_code : 0;
     }
+
+    // maximum consecutive auto-reload attempts before giving up
+    static constexpr int MAX_RELOAD_ATTEMPTS = 3;
 
     void update_args(common_preset_context & ctx_presets, std::string bin_path);
     void update_caps();
