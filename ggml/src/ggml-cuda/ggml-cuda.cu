@@ -106,6 +106,16 @@ void ggml_cuda_error(const char * stmt, const char * func, const char * file, in
 
 // this is faster on Windows
 // probably because the Windows CUDA libraries forget to make this check before invoking the drivers
+// Forward declarations for host-staged cross-GPU copy helpers
+// (used by buffer ops before their definition site).
+static cudaError_t ggml_cuda_copy_across_devices(
+    void * dst, int dst_device, const void * src, int src_device,
+    size_t size, cudaStream_t dst_stream, cudaStream_t src_stream);
+static cudaError_t ggml_cuda_copy2d_across_devices(
+    void * dst, int dst_device, size_t dpitch,
+    const void * src, int src_device, size_t spitch,
+    size_t width, size_t height, cudaStream_t dst_stream, cudaStream_t src_stream);
+
 void ggml_cuda_set_device(int device) {
     int current_device;
     CUDA_CHECK(cudaGetDevice(&current_device));
@@ -2075,7 +2085,29 @@ static void ggml_cuda_op_mul_mat(
 
                 // copy src0, src1 to device if necessary
                 if (src1_is_contiguous) {
-                    if (id != ctx.device) {
+                    if (id != ctx.device && !ggml_cuda_info().peer_access[ctx.device][id]) {
+                        // No peer access — use host-staged fallback.
+                        // We need to wait for ctx.device to finish writing src1 first.
+                        if (split) {
+                            CUDA_CHECK(cudaStreamWaitEvent(stream,
+                                src0_extra->events[ctx.device][0], 0));
+                        }
+                        if (quantize_src1) {
+                            CUDA_CHECK(ggml_cuda_copy_across_devices(
+                                dev[id].src1_ddq + src1_ddq_i_offset, id,
+                                dev[ctx.device].src1_ddq + src1_ddq_i_offset, ctx.device,
+                                src1_ncols*src1_padded_col_size*q8_1_ts/q8_1_bs,
+                                stream, ctx.stream()));
+                        } else {
+                            float * dst_p = dev[id].src1_ddf + (i0*ne11 + src1_col_0) * ne10;
+                            float * src_p = (float *) src1->data;
+                            src_p += (i0*ne11 + src1_col_0) * ne10;
+                            CUDA_CHECK(ggml_cuda_copy_across_devices(
+                                dst_p, id, src_p, ctx.device,
+                                src1_ncols*ne10*sizeof(float),
+                                stream, ctx.stream()));
+                        }
+                    } else if (id != ctx.device) {
                         if (quantize_src1) {
                             char * src1_ddq_i_source = dev[ctx.device].src1_ddq + src1_ddq_i_offset;
                             if (quantize_src1 == quantize_mmq_q8_1_cuda) {
@@ -2130,8 +2162,16 @@ static void ggml_cuda_op_mul_mat(
                         float * dhf_dst_i = (float *) ((char *) dst_off_device + i02*nb2 + i03*nb3);
                         GGML_ASSERT(dst->nb[1] == ne0*sizeof(float));
                         dhf_dst_i += src1_col_0*ne0 + dev[id].row_low;
-                        CUDA_CHECK(ggml_cuda_Memcpy2DPeerAsync(
-                            dhf_dst_i, ctx.device, ne0*sizeof(float), dst_dd_i, id, row_diff*sizeof(float), row_diff*sizeof(float), src1_ncols, stream));
+                        if (!ggml_cuda_info().peer_access[id][ctx.device]) {
+                            CUDA_CHECK(ggml_cuda_copy2d_across_devices(
+                                dhf_dst_i, ctx.device, ne0*sizeof(float),
+                                dst_dd_i, id, row_diff*sizeof(float),
+                                row_diff*sizeof(float), src1_ncols,
+                                ctx.stream(), stream));
+                        } else {
+                            CUDA_CHECK(ggml_cuda_Memcpy2DPeerAsync(
+                                dhf_dst_i, ctx.device, ne0*sizeof(float), dst_dd_i, id, row_diff*sizeof(float), row_diff*sizeof(float), src1_ncols, stream));
+                        }
                     } else {
                         float * dhf_dst_i = (float *) ((char *) dst_off_device + i02*nb2 + i03*nb3);
                         GGML_ASSERT(dst->nb[1] == ne0*sizeof(float));
