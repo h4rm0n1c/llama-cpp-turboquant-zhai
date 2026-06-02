@@ -848,7 +848,17 @@ void server_models::load(const std::string & name) {
                     // (e.g. SIGABRT from CUDA OOM) leaves a zombie slot: the router
                     // still shows "loaded" even though no process is running, and
                     // subsequent requests either hang or fail with confusing errors.
-                    this->update_status(name, SERVER_MODEL_STATUS_UNLOADED, 1);
+                    // Use try-lock: if the stopping thread holds the mutex from a
+                    // cv_stop spurious wakeup, skip the update — the post-join
+                    // code will set the correct exit_code and run auto-recover.
+                    std::unique_lock<std::mutex> _try_lk(this->mutex, std::try_to_lock);
+                    if (_try_lk.owns_lock()) {
+                        auto _it = mapping.find(name);
+                        if (_it != mapping.end()) {
+                            _it->second.meta.status    = SERVER_MODEL_STATUS_UNLOADED;
+                            _it->second.meta.exit_code = 1;
+                        }
+                    }
                 } else if (ferror(stdout_file)) {
                     // Read error on stdout (not EOF).  Log and fall through;
                     // the child may still be alive, so don't change status.
@@ -899,16 +909,19 @@ void server_models::load(const std::string & name) {
 
         // we reach here when the child process exits
         // note: we cannot join() prior to this point because it will close stdin_file
-        // Timeout join to prevent permanent hangs: the log thread reads the
-        // child's stdout via fgets.  When the child exits the pipe closes,
-        // but a race between the stopping thread's cv_stop wait and the log
-        // thread's update_status mutex acquisition can stall both threads
-        // indefinitely.  Use a timeout via async future so the lifecycle
-        // thread always makes progress even if the child's stdout doesn't
-        // close cleanly.
+        // The log thread reads the child's stdout via fgets.  When the child
+        // exits the pipe closes and fgets returns NULL.  In rare races the
+        // stopping thread can hold the mutex (from cv_stop spurious wakeup)
+        // while the log thread tries to acquire it for update_status, stalling
+        // both threads.  The post-join code below still runs the auto-recover
+        // logic with the correct exit_code, so the status update from the log
+        // thread is redundant — skip it by using the mutex try-lock pattern
+        // in the log thread's EOF handler.  For live locks that still occur,
+        // use a long timeout join; detaching orphan threads corrupts state
+        // for subsequent lifecycle threads.
         if (log_thread.joinable()) {
             auto _join_log = std::async(std::launch::async, [&]() { log_thread.join(); });
-            if (_join_log.wait_for(std::chrono::seconds(15)) != std::future_status::ready) {
+            if (_join_log.wait_for(std::chrono::seconds(120)) != std::future_status::ready) {
                 SRV_WRN("log_thread join timed out for model name=%s, detaching\n", name.c_str());
                 log_thread.detach();
             }
@@ -922,7 +935,7 @@ void server_models::load(const std::string & name) {
         }
         if (stopping_thread.joinable()) {
             auto _join_stop = std::async(std::launch::async, [&]() { stopping_thread.join(); });
-            if (_join_stop.wait_for(std::chrono::seconds(15)) != std::future_status::ready) {
+            if (_join_stop.wait_for(std::chrono::seconds(120)) != std::future_status::ready) {
                 SRV_WRN("stopping_thread join timed out for model name=%s, detaching\n", name.c_str());
                 stopping_thread.detach();
             }
