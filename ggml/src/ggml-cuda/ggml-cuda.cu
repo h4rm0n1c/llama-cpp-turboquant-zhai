@@ -106,6 +106,16 @@ void ggml_cuda_error(const char * stmt, const char * func, const char * file, in
 
 // this is faster on Windows
 // probably because the Windows CUDA libraries forget to make this check before invoking the drivers
+// Forward declarations for host-staged cross-GPU copy helpers
+// (used by buffer ops before their definition site).
+static cudaError_t ggml_cuda_copy_across_devices(
+    void * dst, int dst_device, const void * src, int src_device,
+    size_t size, cudaStream_t dst_stream, cudaStream_t src_stream);
+static cudaError_t ggml_cuda_copy2d_across_devices(
+    void * dst, int dst_device, size_t dpitch,
+    const void * src, int src_device, size_t spitch,
+    size_t width, size_t height, cudaStream_t dst_stream, cudaStream_t src_stream);
+
 void ggml_cuda_set_device(int device) {
     int current_device;
     CUDA_CHECK(cudaGetDevice(&current_device));
@@ -2159,7 +2169,7 @@ static void ggml_cuda_op_mul_mat(
 
                 // copy src0, src1 to device if necessary
                 if (src1_is_contiguous) {
-                    if (id != ctx.device && !info.peer_access[ctx.device][id]) {
+                    if (id != ctx.device && !ggml_cuda_info().peer_access[ctx.device][id]) {
                         // No peer access — use host-staged fallback.
                         // We need to wait for ctx.device to finish writing src1 first.
                         if (split) {
@@ -2237,7 +2247,7 @@ static void ggml_cuda_op_mul_mat(
                         GGML_ASSERT(dst->nb[1] == ne0*sizeof(float));
                         dhf_dst_i += src1_col_0*ne0 + dev[id].row_low;
                         const auto & info = ggml_cuda_info();
-                        if (!info.peer_access[id][ctx.device]) {
+                        if (!ggml_cuda_info().peer_access[id][ctx.device]) {
                             CUDA_CHECK(ggml_cuda_copy2d_across_devices(
                                 dhf_dst_i, ctx.device, ne0*sizeof(float),
                                 dst_dd_i, id, row_diff*sizeof(float),
