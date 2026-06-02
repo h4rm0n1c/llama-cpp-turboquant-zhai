@@ -13,7 +13,6 @@
 #include <thread>
 #include <mutex>
 #include <condition_variable>
-#include <future>
 #include <cstring>
 #include <cstdlib>
 #include <atomic>
@@ -848,17 +847,7 @@ void server_models::load(const std::string & name) {
                     // (e.g. SIGABRT from CUDA OOM) leaves a zombie slot: the router
                     // still shows "loaded" even though no process is running, and
                     // subsequent requests either hang or fail with confusing errors.
-                    // Use try-lock: if the stopping thread holds the mutex from a
-                    // cv_stop spurious wakeup, skip the update — the post-join
-                    // code will set the correct exit_code and run auto-recover.
-                    std::unique_lock<std::mutex> _try_lk(this->mutex, std::try_to_lock);
-                    if (_try_lk.owns_lock()) {
-                        auto _it = mapping.find(name);
-                        if (_it != mapping.end()) {
-                            _it->second.meta.status    = SERVER_MODEL_STATUS_UNLOADED;
-                            _it->second.meta.exit_code = 1;
-                        }
-                    }
+                    this->update_status(name, SERVER_MODEL_STATUS_UNLOADED, 1);
                 } else if (ferror(stdout_file)) {
                     // Read error on stdout (not EOF).  Log and fall through;
                     // the child may still be alive, so don't change status.
@@ -878,7 +867,7 @@ void server_models::load(const std::string & name) {
                 return is_stopping() || !subprocess_alive(child_proc.get());
             };
             {
-                std::unique_lock<std::mutex> lk(this->mutex);
+                std::unique_lock<std::mutex> lk(this->stop_mutex);
                 this->cv_stop.wait(lk, should_wake);
             }
             // child may have already exited (e.g. crashed) — skip shutdown sequence
@@ -892,7 +881,7 @@ void server_models::load(const std::string & name) {
             // wait to stop gracefully or timeout
             int64_t start_time = ggml_time_ms();
             while (true) {
-                std::unique_lock<std::mutex> lk(this->mutex);
+                std::unique_lock<std::mutex> lk(this->stop_mutex);
                 if (!is_stopping()) {
                     return; // already stopped
                 }
@@ -910,29 +899,12 @@ void server_models::load(const std::string & name) {
         // we reach here when the child process exits
         // note: we cannot join() prior to this point because it will close stdin_file
         if (log_thread.joinable()) {
-            // Timed join with FD-close fallback.  The log thread reads the
-            // child's stdout via fgets.  Normally the pipe closes when the
-            // child exits and fgets returns NULL within milliseconds.  In
-            // rare races the pipe buffer holds data that takes time to drain
-            // or the stopping thread blocks the mutex (spurious cv_stop
-            // wakeup), stalling fgets.  After 15s, close the pipe FD to
-            // force fgets to return EBADF/NULL, then join normally.
-            int _pipe_fd = stdout_file ? fileno(stdout_file) : -1;
-            auto _join_fut = std::async(std::launch::async,
-                [&]() { log_thread.join(); });
-            if (_join_fut.wait_for(std::chrono::seconds(15))
-                    != std::future_status::ready) {
-                SRV_WRN("log_thread join timed out for model name=%s, "
-                        "closing pipe to unblock fgets\n", name.c_str());
-                if (_pipe_fd >= 0) close(_pipe_fd);
-                _join_fut.wait();
-            }
-            child_proc->stdout_file = nullptr;
+            log_thread.join();
         }
 
         // stop the timeout monitoring thread
         {
-            std::lock_guard<std::mutex> lk(this->mutex);
+            std::lock_guard<std::mutex> lk(this->stop_mutex);
             stopping_models.erase(name);
             cv_stop.notify_all();
         }
@@ -1006,13 +978,16 @@ void server_models::unload(const std::string & name) {
     if (it != mapping.end()) {
         if (it->second.meta.is_running()) {
             SRV_INF("stopping model instance name=%s\n", name.c_str());
-            stopping_models.insert(name);
+            {
+                std::lock_guard<std::mutex> lk2(stop_mutex);
+                stopping_models.insert(name);
+                cv_stop.notify_all();
+            }
             if (it->second.meta.status == SERVER_MODEL_STATUS_LOADING) {
                 // special case: if model is in loading state, unloading means force-killing it
                 SRV_WRN("model name=%s is still loading, force-killing\n", name.c_str());
                 subprocess_terminate(it->second.subproc.get());
             }
-            cv_stop.notify_all();
             // status change will be handled by the managing thread
         } else {
             SRV_WRN("model instance name=%s is not running\n", name.c_str());
@@ -1024,6 +999,7 @@ void server_models::unload_all() {
     std::vector<std::thread> to_join;
     {
         std::lock_guard<std::mutex> lk(mutex);
+        std::lock_guard<std::mutex> lk2(stop_mutex);
         for (auto & [name, inst] : mapping) {
             if (inst.meta.is_running()) {
                 SRV_INF("stopping model instance name=%s\n", name.c_str());

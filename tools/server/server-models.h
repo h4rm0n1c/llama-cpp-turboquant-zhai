@@ -121,11 +121,15 @@ private:
         FILE * stdin_file = nullptr;
     };
 
-    std::mutex mutex;
+    std::mutex mutex;           // protects mapping, model meta, cv (model state changes)
     std::condition_variable cv;
     std::map<std::string, instance_t> mapping;
 
-    // for stopping models
+    // for stopping models — separate mutex prevents cv_stop from contending
+    // with update_status() on mutex (both used different critical sections).
+    // Acquire in order: mutex first, then stop_mutex.  No site ever acquires
+    // stop_mutex then tries to acquire mutex — guaranteed no deadlock.
+    std::mutex stop_mutex;
     std::condition_variable cv_stop;
     std::set<std::string> stopping_models;
 
