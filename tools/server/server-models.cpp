@@ -13,6 +13,7 @@
 #include <thread>
 #include <mutex>
 #include <condition_variable>
+#include <future>
 #include <cstring>
 #include <cstdlib>
 #include <atomic>
@@ -909,7 +910,24 @@ void server_models::load(const std::string & name) {
         // we reach here when the child process exits
         // note: we cannot join() prior to this point because it will close stdin_file
         if (log_thread.joinable()) {
-            log_thread.join();
+            // Timed join with FD-close fallback.  The log thread reads the
+            // child's stdout via fgets.  Normally the pipe closes when the
+            // child exits and fgets returns NULL within milliseconds.  In
+            // rare races the pipe buffer holds data that takes time to drain
+            // or the stopping thread blocks the mutex (spurious cv_stop
+            // wakeup), stalling fgets.  After 15s, close the pipe FD to
+            // force fgets to return EBADF/NULL, then join normally.
+            int _pipe_fd = stdout_file ? fileno(stdout_file) : -1;
+            auto _join_fut = std::async(std::launch::async,
+                [&]() { log_thread.join(); });
+            if (_join_fut.wait_for(std::chrono::seconds(15))
+                    != std::future_status::ready) {
+                SRV_WRN("log_thread join timed out for model name=%s, "
+                        "closing pipe to unblock fgets\n", name.c_str());
+                if (_pipe_fd >= 0) close(_pipe_fd);
+                _join_fut.wait();
+            }
+            child_proc->stdout_file = nullptr;
         }
 
         // stop the timeout monitoring thread
