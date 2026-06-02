@@ -71,7 +71,10 @@ static server_http_context::handler_t ex_wrapper(server_http_context::handler_t 
     };
 }
 
-int main(int argc, char ** argv) {
+// satisfies -Wmissing-declarations
+int llama_server(int argc, char ** argv);
+
+int llama_server(int argc, char ** argv) {
     std::setlocale(LC_NUMERIC, "C");
 
     // own arguments required by this example
@@ -300,11 +303,29 @@ int main(int argc, char ** argv) {
         }
 
         if (!ctx_server.load_model(params)) {
+            // Signal the parent that loading failed so it can transition to
+            // UNLOADED instead of staying stuck in LOADING forever.
+            // Check for a pending CUDA error — CUDA_CHECK macros log the
+            // error but don't propagate it, so cudaGetLastError still has it.
+            std::string err_reason = "model load failed";
+            {   // avoid including CUDA headers — these are in CUDA runtime API
+                typedef int cudaError_t;
+                extern cudaError_t cudaGetLastError(void);
+                extern const char * cudaGetErrorString(cudaError_t);
+                cudaError_t ce = cudaGetLastError();
+                if (ce != 0) {
+                    err_reason += " (cuda: ";
+                    err_reason += cudaGetErrorString(ce);
+                    err_reason += ")";
+                }
+            }
+            fprintf(stdout, "%s%s\n", CMD_CHILD_TO_ROUTER_ERROR, err_reason.c_str());
+            fflush(stdout);
             clean_up();
             if (ctx_http.thread.joinable()) {
                 ctx_http.thread.join();
             }
-            SRV_ERR("%s", "exiting due to model loading error\n");
+            SRV_ERR("%s", "exiting due to model loading error");
             return 1;
         }
 
@@ -351,6 +372,12 @@ int main(int argc, char ** argv) {
         std::thread monitor_thread;
         if (server_models::is_child_server()) {
             json model_info = routes.get_model_info();
+            // Attach per-device VRAM breakdown so the router can expose it via
+            // /v1/models without requiring host-side nvidia-smi queries.
+            auto * ll_ctx_info = ctx_server.get_llama_context();
+            if (ll_ctx_info != nullptr) {
+                model_info["memory"] = common_memory_breakdown_json(ll_ctx_info);
+            }
             monitor_thread = server_models::setup_child_server(shutdown_handler, model_info);
         }
 

@@ -4,6 +4,8 @@
 
 #include "../src/llama-ext.h"
 
+#include "nlohmann/json.hpp"
+
 #include <array>
 #include <cassert>
 #include <stdexcept>
@@ -26,7 +28,7 @@ class common_params_fit_exception : public std::runtime_error {
     using std::runtime_error::runtime_error;
 };
 
-static std::vector<llama_device_memory_data> common_get_device_memory_data(
+std::vector<llama_device_memory_data> common_get_device_memory_data(
         const char * path_model,
         const llama_model_params * mparams,
         const llama_context_params * cparams,
@@ -929,6 +931,70 @@ void common_memory_breakdown_print(const struct llama_context * ctx) {
             __func__, td[1].c_str(), td[2].c_str(), td[3].c_str(), td[4].c_str(), td[5].c_str(),
             td[6].c_str(), td[7].c_str(), td[8].c_str());
     }
+}
+
+nlohmann::json common_memory_breakdown_json(const struct llama_context * ctx) {
+    const auto * model = llama_get_model(ctx);
+
+    std::vector<ggml_backend_dev_t> devices;
+    for (int i = 0; i < llama_model_n_devices(model); i++) {
+        devices.push_back(llama_model_get_device(model, i));
+    }
+
+    llama_memory_breakdown memory_breakdown = llama_get_memory_breakdown(ctx);
+
+    std::set<ggml_backend_buffer_type_t> seen_buffer_types;
+    std::vector<llama_memory_breakdown_data> mb_dev(devices.size());
+    llama_memory_breakdown_data              mb_host;
+
+    for (const auto & buft_mb : memory_breakdown) {
+        ggml_backend_buffer_type_t          buft = buft_mb.first;
+        const llama_memory_breakdown_data & mb   = buft_mb.second;
+        if (ggml_backend_buft_is_host(buft)) {
+            mb_host.model   += mb.model;
+            mb_host.context += mb.context;
+            mb_host.compute += mb.compute;
+            seen_buffer_types.insert(buft);
+            continue;
+        }
+        ggml_backend_dev_t dev = ggml_backend_buft_get_device(buft);
+        if (dev) {
+            for (size_t i = 0; i < devices.size(); i++) {
+                if (devices[i] == dev) {
+                    mb_dev[i].model   += mb.model;
+                    mb_dev[i].context += mb.context;
+                    mb_dev[i].compute += mb.compute;
+                    seen_buffer_types.insert(buft);
+                    break;
+                }
+            }
+        }
+    }
+
+    nlohmann::json gpu_arr = nlohmann::json::array();
+    for (size_t i = 0; i < devices.size(); i++) {
+        ggml_backend_dev_t dev = devices[i];
+        const llama_memory_breakdown_data & mb = mb_dev[i];
+
+        size_t free_bytes = 0, total_bytes = 0;
+        ggml_backend_dev_memory(dev, &free_bytes, &total_bytes);
+
+        gpu_arr.push_back({
+            {"name",        ggml_backend_dev_description(dev)},
+            {"total_bytes", (int64_t)total_bytes},
+            {"free_bytes",  (int64_t)free_bytes},
+            {"model_bytes", (int64_t)mb.model},
+            {"kv_bytes",    (int64_t)mb.context},
+            {"compute_bytes",(int64_t)mb.compute},
+        });
+    }
+
+    return {
+        {"gpus",          gpu_arr},
+        {"host_model_bytes",   (int64_t)mb_host.model},
+        {"host_kv_bytes",      (int64_t)mb_host.context},
+        {"host_compute_bytes", (int64_t)mb_host.compute},
+    };
 }
 
 void common_fit_print(
