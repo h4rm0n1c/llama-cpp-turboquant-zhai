@@ -13,7 +13,6 @@
 #include <thread>
 #include <mutex>
 #include <condition_variable>
-#include <future>
 #include <cstring>
 #include <cstdlib>
 #include <atomic>
@@ -909,22 +908,8 @@ void server_models::load(const std::string & name) {
 
         // we reach here when the child process exits
         // note: we cannot join() prior to this point because it will close stdin_file
-        // The log thread reads the child's stdout via fgets.  When the child
-        // exits the pipe closes and fgets returns NULL.  In rare races the
-        // stopping thread can hold the mutex (from cv_stop spurious wakeup)
-        // while the log thread tries to acquire it for update_status, stalling
-        // both threads.  The post-join code below still runs the auto-recover
-        // logic with the correct exit_code, so the status update from the log
-        // thread is redundant — skip it by using the mutex try-lock pattern
-        // in the log thread's EOF handler.  For live locks that still occur,
-        // use a long timeout join; detaching orphan threads corrupts state
-        // for subsequent lifecycle threads.
         if (log_thread.joinable()) {
-            auto _join_log = std::async(std::launch::async, [&]() { log_thread.join(); });
-            if (_join_log.wait_for(std::chrono::seconds(120)) != std::future_status::ready) {
-                SRV_WRN("log_thread join timed out for model name=%s, detaching\n", name.c_str());
-                log_thread.detach();
-            }
+            log_thread.join();
         }
 
         // stop the timeout monitoring thread
@@ -934,11 +919,7 @@ void server_models::load(const std::string & name) {
             cv_stop.notify_all();
         }
         if (stopping_thread.joinable()) {
-            auto _join_stop = std::async(std::launch::async, [&]() { stopping_thread.join(); });
-            if (_join_stop.wait_for(std::chrono::seconds(120)) != std::future_status::ready) {
-                SRV_WRN("stopping_thread join timed out for model name=%s, detaching\n", name.c_str());
-                stopping_thread.detach();
-            }
+            stopping_thread.join();
         }
 
         // get the exit code
