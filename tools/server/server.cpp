@@ -310,8 +310,14 @@ int llama_server(int argc, char ** argv) {
             std::string err_reason = "model load failed";
             {   // avoid including CUDA headers — these are in CUDA runtime API
                 typedef int cudaError_t;
-                extern "C" cudaError_t cudaGetLastError(void);
-                extern "C" const char * cudaGetErrorString(cudaError_t);
+#ifdef __cplusplus
+                extern "C" {
+#endif
+                cudaError_t cudaGetLastError(void);
+                const char * cudaGetErrorString(cudaError_t);
+#ifdef __cplusplus
+                }
+#endif
                 cudaError_t ce = cudaGetLastError();
                 if (ce != 0) {
                     err_reason += " (cuda: ";
