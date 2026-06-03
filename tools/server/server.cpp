@@ -13,6 +13,7 @@
 
 #include <atomic>
 #include <clocale>
+#include <dlfcn.h>
 #include <exception>
 #include <signal.h>
 #include <thread> // for std::thread::hardware_concurrency
@@ -308,21 +309,21 @@ int llama_server(int argc, char ** argv) {
             // Check for a pending CUDA error — CUDA_CHECK macros log the
             // error but don't propagate it, so cudaGetLastError still has it.
             std::string err_reason = "model load failed";
-            {   // avoid including CUDA headers — these are in CUDA runtime API
+            {   // detect CUDA errors without including CUDA runtime headers
+                // Use dlopen/dlsym so this file compiles cleanly under both
+                // C and C++ without depending on CUDA toolkit headers.
                 typedef int cudaError_t;
-#ifdef __cplusplus
-                extern "C" {
-#endif
-                cudaError_t cudaGetLastError(void);
-                const char * cudaGetErrorString(cudaError_t);
-#ifdef __cplusplus
-                }
-#endif
-                cudaError_t ce = cudaGetLastError();
-                if (ce != 0) {
-                    err_reason += " (cuda: ";
-                    err_reason += cudaGetErrorString(ce);
-                    err_reason += ")";
+                auto * cudaGetLastError_fn = (cudaError_t (*)(void))
+                    dlsym(RTLD_DEFAULT, "cudaGetLastError");
+                auto * cudaGetErrorString_fn = (const char * (*)(cudaError_t))
+                    dlsym(RTLD_DEFAULT, "cudaGetErrorString");
+                if (cudaGetLastError_fn && cudaGetErrorString_fn) {
+                    cudaError_t ce = cudaGetLastError_fn();
+                    if (ce != 0) {
+                        err_reason += " (cuda: ";
+                        err_reason += cudaGetErrorString_fn(ce);
+                        err_reason += ")";
+                    }
                 }
             }
             fprintf(stdout, "%s%s\n", CMD_CHILD_TO_ROUTER_ERROR, err_reason.c_str());
