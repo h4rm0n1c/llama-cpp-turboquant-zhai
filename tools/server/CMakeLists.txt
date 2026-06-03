@@ -44,6 +44,16 @@ target_include_directories(${TARGET} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_include_directories(${TARGET} PRIVATE ../mtmd ${CMAKE_SOURCE_DIR})
 target_link_libraries(${TARGET} PUBLIC server-context llama-ui cpp-httplib ${CMAKE_THREAD_LIBS_INIT})
 
+# When the CUDA backend is a dlopen'd module, the server executable
+# needs CUDA runtime symbols (e.g. cudaGetLastError in OOM cleanup paths)
+# in its symbol table so they're available to the loaded module.
+if (GGML_CUDA)
+    find_package(CUDAToolkit QUIET)
+    if (CUDAToolkit_FOUND)
+        target_link_libraries(${TARGET} PRIVATE CUDA::cudart)
+    endif()
+endif()
+
 if(LLAMA_TOOLS_INSTALL)
     install(TARGETS ${TARGET} LIBRARY)
 endif()
