@@ -310,19 +310,24 @@ int llama_server(int argc, char ** argv) {
             // error but don't propagate it, so cudaGetLastError still has it.
             std::string err_reason = "model load failed";
             {   // detect CUDA errors without including CUDA runtime headers
-                // Use dlopen/dlsym so this file compiles cleanly under both
-                // C and C++ without depending on CUDA toolkit headers.
+                // The CUDA backend is loaded with RTLD_LOCAL, so its symbols
+                // (including libcudart) aren't in the global symbol table.
+                // dlopen libcudart explicitly to make cudaGetLastError visible.
                 typedef int cudaError_t;
-                auto * cudaGetLastError_fn = (cudaError_t (*)(void))
-                    dlsym(RTLD_DEFAULT, "cudaGetLastError");
-                auto * cudaGetErrorString_fn = (const char * (*)(cudaError_t))
-                    dlsym(RTLD_DEFAULT, "cudaGetErrorString");
-                if (cudaGetLastError_fn && cudaGetErrorString_fn) {
-                    cudaError_t ce = cudaGetLastError_fn();
-                    if (ce != 0) {
-                        err_reason += " (cuda: ";
-                        err_reason += cudaGetErrorString_fn(ce);
-                        err_reason += ")";
+                void * cudart = dlopen("libcudart.so.12", RTLD_NOW | RTLD_GLOBAL);
+                if (!cudart) {
+                    cudart = dlopen("libcudart.so", RTLD_LAZY | RTLD_GLOBAL);
+                }
+                if (cudart) {
+                    auto * fn_last = (cudaError_t (*)(void))dlsym(cudart, "cudaGetLastError");
+                    auto * fn_str  = (const char * (*)(cudaError_t))dlsym(cudart, "cudaGetErrorString");
+                    if (fn_last && fn_str) {
+                        cudaError_t ce = fn_last();
+                        if (ce != 0) {
+                            err_reason += " (cuda: ";
+                            err_reason += fn_str(ce);
+                            err_reason += ")";
+                        }
                     }
                 }
             }
