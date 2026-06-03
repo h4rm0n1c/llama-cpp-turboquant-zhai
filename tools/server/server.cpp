@@ -13,6 +13,7 @@
 
 #include <atomic>
 #include <clocale>
+#include <dlfcn.h>
 #include <exception>
 #include <signal.h>
 #include <thread> // for std::thread::hardware_concurrency
@@ -289,6 +290,35 @@ int main(int argc, char ** argv) {
         }
 
         if (!ctx_server.load_model(params)) {
+            // Signal the parent that loading failed so it can transition to
+            // UNLOADED instead of staying stuck in LOADING forever.
+            // Check for a pending CUDA error — CUDA_CHECK macros log the
+            // error but don't propagate it, so cudaGetLastError still has it.
+            std::string err_reason = "model load failed";
+            {   // detect CUDA errors without including CUDA runtime headers
+                // The CUDA backend is loaded with RTLD_LOCAL, so its symbols
+                // (including libcudart) aren't in the global symbol table.
+                // dlopen libcudart explicitly to make cudaGetLastError visible.
+                typedef int cudaError_t;
+                void * cudart = dlopen("libcudart.so.12", RTLD_NOW | RTLD_GLOBAL);
+                if (!cudart) {
+                    cudart = dlopen("libcudart.so", RTLD_LAZY | RTLD_GLOBAL);
+                }
+                if (cudart) {
+                    auto * fn_last = (cudaError_t (*)(void))dlsym(cudart, "cudaGetLastError");
+                    auto * fn_str  = (const char * (*)(cudaError_t))dlsym(cudart, "cudaGetErrorString");
+                    if (fn_last && fn_str) {
+                        cudaError_t ce = fn_last();
+                        if (ce != 0) {
+                            err_reason += " (cuda: ";
+                            err_reason += fn_str(ce);
+                            err_reason += ")";
+                        }
+                    }
+                }
+            }
+            fprintf(stdout, "%s%s\n", CMD_CHILD_TO_ROUTER_ERROR, err_reason.c_str());
+            fflush(stdout);
             clean_up();
             if (ctx_http.thread.joinable()) {
                 ctx_http.thread.join();
