@@ -1861,6 +1861,36 @@ static cudaError_t ggml_cuda_Memcpy2DPeerAsync(
 #endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 }
 
+// Pinned host staging buffer for cross-GPU copies without peer access.
+// Reuses a single buffer across calls, growing as needed, to avoid the
+// overhead of per-call cudaMallocHost/cudaFreeHost.
+struct ggml_cuda_host_staging_pool {
+    void * buf = nullptr;
+    size_t size = 0;
+
+    cudaError_t ensure(size_t needed) {
+        if (needed <= size) {
+            return cudaSuccess;
+        }
+        if (buf) {
+            cudaFreeHost(buf);
+        }
+        cudaError_t err = cudaMallocHost(&buf, needed);
+        if (err != cudaSuccess) {
+            buf = nullptr;
+            size = 0;
+            return err;
+        }
+        size = needed;
+        return cudaSuccess;
+    }
+};
+
+static ggml_cuda_host_staging_pool & ggml_cuda_get_staging() {
+    static ggml_cuda_host_staging_pool pool;
+    return pool;
+}
+
 // Host-staged cross-device copy for GPUs without peer access.
 // Copies data from src_device to dst_device via a pinned host buffer.
 // Returns cudaSuccess on success, error code on failure.
@@ -1873,27 +1903,26 @@ static cudaError_t ggml_cuda_copy_across_devices(
         return cudaMemcpyPeerAsync(dst, dst_device, src, src_device, size, dst_stream);
     }
 
-    // Fallback: stage through pinned host memory
-    void * host_buf = nullptr;
-    cudaError_t err;
-
-    ggml_cuda_set_device(src_device);
-    err = cudaMallocHost(&host_buf, size);
+    // Fallback: stage through pinned host memory via reusable pool
+    auto & pool = ggml_cuda_get_staging();
+    cudaError_t err = pool.ensure(size);
     if (err != cudaSuccess) { return err; }
 
-    err = cudaMemcpyAsync(host_buf, src, size, cudaMemcpyDeviceToHost, src_stream);
-    if (err != cudaSuccess) { cudaFreeHost(host_buf); return err; }
+    ggml_cuda_set_device(src_device);
+    err = cudaMemcpyAsync(pool.buf, src, size, cudaMemcpyDeviceToHost, src_stream);
+    if (err != cudaSuccess) { return err; }
 
     err = cudaStreamSynchronize(src_stream);
-    if (err != cudaSuccess) { cudaFreeHost(host_buf); return err; }
+    if (err != cudaSuccess) { return err; }
 
     ggml_cuda_set_device(dst_device);
-    err = cudaMemcpyAsync(dst, host_buf, size, cudaMemcpyHostToDevice, dst_stream);
-    cudaFreeHost(host_buf);
+    err = cudaMemcpyAsync(dst, pool.buf, size, cudaMemcpyHostToDevice, dst_stream);
     return err;
 }
 
 // 2D host-staged cross-device copy for strided data (used in split mul_mat output).
+// Batches all rows into a single contiguous staging buffer to replace the
+// original row-by-row approach (one sync per row → two syncs total).
 static cudaError_t ggml_cuda_copy2d_across_devices(
     void * dst, int dst_device, size_t dpitch,
     const void * src, int src_device, size_t spitch,
@@ -1910,32 +1939,34 @@ static cudaError_t ggml_cuda_copy2d_across_devices(
         return cudaMemcpy3DPeerAsync(&p, dst_stream);
     }
 
-    // Fallback: copy row-by-row through pinned host memory
-    void * host_buf = nullptr;
-    cudaError_t err;
-    const size_t row_size = width;
-
-    ggml_cuda_set_device(src_device);
-    err = cudaMallocHost(&host_buf, row_size);
+    // Fallback: stage all rows through a single contiguous pinned buffer
+    auto & pool = ggml_cuda_get_staging();
+    cudaError_t err = pool.ensure(width * height);
     if (err != cudaSuccess) { return err; }
 
+    // Batch D2H for all rows
+    ggml_cuda_set_device(src_device);
     for (size_t r = 0; r < height; r++) {
-        const char * row_src = (const char *) src + r * spitch;
-        char * row_dst = (char *) dst + r * dpitch;
-
-        err = cudaMemcpyAsync(host_buf, row_src, row_size, cudaMemcpyDeviceToHost, src_stream);
-        if (err != cudaSuccess) { cudaFreeHost(host_buf); return err; }
-        cudaStreamSynchronize(src_stream);
-
-        ggml_cuda_set_device(dst_device);
-        err = cudaMemcpyAsync(row_dst, host_buf, row_size, cudaMemcpyHostToDevice, dst_stream);
-        if (err != cudaSuccess) { cudaFreeHost(host_buf); return err; }
-        cudaStreamSynchronize(dst_stream);
-
-        ggml_cuda_set_device(src_device);
+        err = cudaMemcpyAsync(
+            (char *)pool.buf + r * width,
+            (const char *)src + r * spitch,
+            width, cudaMemcpyDeviceToHost, src_stream);
+        if (err != cudaSuccess) { return err; }
     }
-    cudaFreeHost(host_buf);
-    return cudaSuccess;
+    err = cudaStreamSynchronize(src_stream);
+    if (err != cudaSuccess) { return err; }
+
+    // Batch H2D for all rows
+    ggml_cuda_set_device(dst_device);
+    for (size_t r = 0; r < height; r++) {
+        err = cudaMemcpyAsync(
+            (char *)dst + r * dpitch,
+            (char *)pool.buf + r * width,
+            width, cudaMemcpyHostToDevice, dst_stream);
+        if (err != cudaSuccess) { return err; }
+    }
+    err = cudaStreamSynchronize(dst_stream);
+    return err;
 }
 
 static void ggml_cuda_op_mul_mat(
