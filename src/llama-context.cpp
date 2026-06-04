@@ -889,11 +889,21 @@ float * llama_context::get_embeddings_pre_norm() {
 }
 
 float * llama_context::get_embeddings_pre_norm_ith(int32_t i) {
-    output_reorder();
-
     try {
         if (embd_pre_norm.data == nullptr) {
             throw std::runtime_error("no pre-norm embeddings");
+        }
+
+        int64_t j = i;
+        if (j < 0) {
+            j = n_outputs_pre_norm + j;
+            if (j < 0) {
+                throw std::runtime_error(format("negative index out of range [0, %d)", n_outputs_pre_norm));
+            }
+        }
+
+        if (j >= n_outputs_pre_norm) {
+            throw std::runtime_error(format("pre-norm embeddings id out of range [0, %d)", n_outputs_pre_norm));
         }
 
         const uint32_t n_embd = model.hparams.n_embd;
@@ -1370,6 +1380,7 @@ int llama_context::encode(const llama_batch & batch_inp) {
     }
 
     n_outputs = n_tokens;
+    n_outputs_pre_norm = cparams.embeddings_pre_norm ? n_tokens : 0;
 
     const auto causal_attn_org = cparams.causal_attn;
 
@@ -1755,13 +1766,13 @@ int llama_context::decode(const llama_batch & batch_inp) {
     }
 
     // reserve output buffer
-    if (output_reserve(n_outputs_all) < n_outputs_all) {
+    if (output_reserve(n_outputs_all, cparams.embeddings_pre_norm ? n_tokens_all : n_outputs_all) < n_outputs_all) {
         LLAMA_LOG_ERROR("%s: could not reserve space for batch with %d outputs\n", __func__, n_outputs_all);
         return -2;
     };
 
     int64_t n_outputs_prev = 0;
-    int64_t n_tokens_prev  = 0;
+    int64_t n_outputs_pre_norm_prev = 0;
 
     do {
         const auto & ubatch = mctx->get_ubatch();
@@ -1907,21 +1918,17 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
         // extract pre-norm embeddings (hidden state before the final output norm)
         // only meaningful in LLAMA_POOLING_TYPE_NONE (per-token); other pooling modes are ignored.
-        {
-            const bool masked    = cparams.embeddings_pre_norm_masked;
-            const int64_t n_rows = masked ? n_outputs       : (int64_t) ubatch.n_tokens;
-            const int64_t offset = masked ? n_outputs_prev  : n_tokens_prev;
+        if (embd_pre_norm.data && t_h_pre_norm && cparams.pooling_type == LLAMA_POOLING_TYPE_NONE) {
+            ggml_backend_t backend_h = ggml_backend_sched_get_tensor_backend(sched.get(), t_h_pre_norm);
+            GGML_ASSERT(backend_h != nullptr);
 
-            if (embd_pre_norm.data && t_h_pre_norm && n_rows > 0 && cparams.pooling_type == LLAMA_POOLING_TYPE_NONE) {
-                ggml_backend_t backend_h = ggml_backend_sched_get_tensor_backend(sched.get(), t_h_pre_norm);
-                GGML_ASSERT(backend_h != nullptr);
+            const uint32_t n_embd = hparams.n_embd;
+            const int64_t n_outputs_pre_norm_new = t_h_pre_norm->ne[1];
+            float * embd_pre_norm_out = embd_pre_norm.data + n_outputs_pre_norm_prev*n_embd;
 
-                const uint32_t n_embd = hparams.n_embd;
-                float * embd_pre_norm_out = embd_pre_norm.data + offset*n_embd;
-
-                GGML_ASSERT((offset + n_rows)*n_embd <= (int64_t) embd_pre_norm.size);
-                ggml_backend_tensor_get_async(backend_h, t_h_pre_norm, embd_pre_norm_out, 0, n_rows*n_embd*sizeof(float));
-            }
+            GGML_ASSERT(n_outputs_pre_norm_prev + n_outputs_pre_norm_new <= (int64_t) embd_pre_norm.size/(int64_t)n_embd);
+            ggml_backend_tensor_get_async(backend_h, t_h_pre_norm, embd_pre_norm_out, 0, n_outputs_pre_norm_new*n_embd*sizeof(float));
+            n_outputs_pre_norm_prev += n_outputs_pre_norm_new;
         }
 
         // Copy backend sampling output if this ubatch produced any sampling tensors.
@@ -1943,6 +1950,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
     // set to total number of outputs in the batch, for use in llama_get_logits_ith
     n_outputs = n_outputs_all;
+    n_outputs_pre_norm = n_outputs_pre_norm_prev;
 
     // set output mappings
     if (n_outputs > 0) {
@@ -2001,11 +2009,14 @@ int llama_context::decode(const llama_batch & batch_inp) {
 // output
 //
 
-uint32_t llama_context::output_reserve(int32_t n_outputs) {
+uint32_t llama_context::output_reserve(int32_t n_outputs, int32_t n_outputs_pre_norm_req) {
     const auto & hparams = model.hparams;
     const auto & vocab   = model.vocab;
 
     const int64_t n_outputs_max = std::max<int64_t>(n_outputs, n_seq_max());
+    const int64_t n_outputs_pre_norm_max = cparams.embeddings_pre_norm
+        ? std::max<int64_t>(n_outputs_pre_norm_req < 0 ? n_outputs : n_outputs_pre_norm_req, n_seq_max())
+        : 0;
 
     const auto n_batch    = cparams.n_batch;
     const auto n_vocab    = vocab.n_tokens();
@@ -2028,7 +2039,7 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
 
     logits.size        = has_logits        ? n_vocab*n_outputs_max     : 0;
     embd.size          = has_embd          ? n_embd_out*n_outputs_max  : 0;
-    embd_pre_norm.size = has_embd_pre_norm ? n_embd*n_outputs_max      : 0;
+    embd_pre_norm.size = has_embd_pre_norm ? n_embd*n_outputs_pre_norm_max : 0;
 
     if (has_embd_pre_norm && !cparams.embeddings_pre_norm_masked) {
         // unmasked: pre-norm row exists for every token in the batch, not just
@@ -2139,6 +2150,7 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
     std::fill(output_ids.begin(), output_ids.end(), -1);
 
     this->n_outputs = 0;
+    this->n_outputs_pre_norm = 0;
 
     return n_outputs_max;
 }
@@ -2160,12 +2172,6 @@ void llama_context::output_reorder() {
         if (embd.size > 0) {
             for (uint64_t k = 0; k < n_embd; k++) {
                 std::swap(embd.data[i0*n_embd + k], embd.data[i1*n_embd + k]);
-            }
-        }
-
-        if (embd_pre_norm.size > 0) {
-            for (uint64_t k = 0; k < n_embd; k++) {
-                std::swap(embd_pre_norm.data[i0*n_embd + k], embd_pre_norm.data[i1*n_embd + k]);
             }
         }
 
