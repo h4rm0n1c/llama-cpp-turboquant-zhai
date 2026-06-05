@@ -355,7 +355,7 @@ static void common_params_fit_impl(
         // User explicitly set n_gpu_layers (e.g. -ngl 999).  Don't try to fit
         // GPU layers — respect the user's choice.  But we DID fit the context
         // in step 2 above, so keep that.  Skip step 3+4 (GPU layer fitting).
-        LLAMA_LOG_WRN("%s: n_gpu_layers set by user to %d, skipping GPU layer fitting (context was fitted in step 2)\n",
+        LOG_WRN("%s: n_gpu_layers set by user to %d, skipping GPU layer fitting (context was fitted in step 2)\n",
             __func__, mparams->n_gpu_layers);
         return;
     }
