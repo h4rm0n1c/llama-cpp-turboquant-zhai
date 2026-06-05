@@ -1316,10 +1316,6 @@ void server_models_routes::init_routes() {
             if (!meta.last_error.empty()) {
                 status["last_error"] = meta.last_error;
             }
-            }
-            if (!meta.last_error.empty()) {
-                status["last_error"] = meta.last_error;
-            }
 
             // pi coding agent multimodal compatibility
             json input_modalities = json::array({"text"});
