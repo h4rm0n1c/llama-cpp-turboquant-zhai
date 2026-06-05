@@ -726,8 +726,15 @@ void server_models::load(const std::string & name) {
 
     auto meta = mapping[name].meta;
     if (meta.status != SERVER_MODEL_STATUS_UNLOADED) {
-        SRV_INF("model %s is not ready\n", name.c_str());
-        return;
+        // Model is still LOADING or LOADED (e.g. unload was just requested
+        // and the child hasn't exited yet).  Wait for it to reach UNLOADED
+        // before proceeding, so the caller doesn't get a silent no-op.
+        SRV_INF("model %s is not ready (status=%d), waiting for graceful stop...\n",
+            name.c_str(), (int)meta.status);
+        cv.wait(lk, [this, &name]() {
+            auto it = mapping.find(name);
+            return it == mapping.end() || it->second.meta.status == SERVER_MODEL_STATUS_UNLOADED;
+        });
     }
 
     // Re-check capacity under the lock to prevent concurrent loads from
