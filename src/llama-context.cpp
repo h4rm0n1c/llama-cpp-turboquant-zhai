@@ -894,16 +894,17 @@ float * llama_context::get_embeddings_pre_norm_ith(int32_t i) {
             throw std::runtime_error("no pre-norm embeddings");
         }
 
-        int64_t j = i;
-        if (j < 0) {
-            j = n_outputs_pre_norm + j;
+        {
+            int64_t j = i;
             if (j < 0) {
-                throw std::runtime_error(format("negative index out of range [0, %d)", n_outputs_pre_norm));
+                j = n_outputs_pre_norm + j;
+                if (j < 0) {
+                    throw std::runtime_error(format("negative index out of range [0, %d)", n_outputs_pre_norm));
+                }
             }
-        }
-
-        if (j >= n_outputs_pre_norm) {
-            throw std::runtime_error(format("pre-norm embeddings id out of range [0, %d)", n_outputs_pre_norm));
+            if (j >= n_outputs_pre_norm) {
+                throw std::runtime_error(format("pre-norm embeddings id out of range [0, %d)", n_outputs_pre_norm));
+            }
         }
 
         const uint32_t n_embd = model.hparams.n_embd;
@@ -916,8 +917,8 @@ float * llama_context::get_embeddings_pre_norm_ith(int32_t i) {
             return embd_pre_norm.data + (size_t) i * n_embd;
         }
 
-        const int64_t j = output_resolve_row(i);
-        return embd_pre_norm.data + j*n_embd;
+        const int64_t row = output_resolve_row(i);
+        return embd_pre_norm.data + row*n_embd;
     } catch (const std::exception & err) {
         LLAMA_LOG_ERROR("%s: invalid pre-norm embeddings id %d, reason: %s\n", __func__, i, err.what());
 #ifndef NDEBUG
@@ -1945,7 +1946,6 @@ int llama_context::decode(const llama_batch & batch_inp) {
         }
 
         n_outputs_prev += n_outputs;
-        n_tokens_prev  += ubatch.n_tokens;
     } while (mctx->next());
 
     // set to total number of outputs in the batch, for use in llama_get_logits_ith
