@@ -73,6 +73,7 @@ def _apply_wifsignaled_patch(path: str) -> None:
     with open(path, "w") as f:
         f.write(content)
 
+
 for url, filename in vendor.items():
     print(f"downloading {url} to {filename}") # noqa: NP100
     urllib.request.urlretrieve(url, filename)
