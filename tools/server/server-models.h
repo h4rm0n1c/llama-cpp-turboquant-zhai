@@ -176,6 +176,7 @@ public:
     // update the status of a model instance (thread-safe)
     void update_status(const std::string & name, server_model_status status, int exit_code);
     void update_loaded_info(const std::string & name, std::string & raw_info);
+    void update_last_error(const std::string & name, const std::string & error);
 
     // store a human-readable error message for a model instance (thread-safe)
     void update_last_error(const std::string & name, const std::string & error);
