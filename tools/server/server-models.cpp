@@ -1309,10 +1309,13 @@ void server_models_routes::init_routes() {
             if (meta.is_failed()) {
                 status["exit_code"] = meta.exit_code;
                 status["failed"]    = true;
-                if (meta.exit_code < 0) {
-                    // negative exit_code encodes the killing signal
-                    status["exit_signal"] = -meta.exit_code;
+                if (meta.is_signaled()) {
+                    status["exit_signal"] = meta.exit_signal();
                 }
+            }
+            if (!meta.last_error.empty()) {
+                status["last_error"] = meta.last_error;
+            }
             }
             if (!meta.last_error.empty()) {
                 status["last_error"] = meta.last_error;

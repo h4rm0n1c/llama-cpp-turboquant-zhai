@@ -1941,7 +1941,7 @@ struct ggml_cuda_host_staging_pool {
 };
 
 static ggml_cuda_host_staging_pool & ggml_cuda_get_staging() {
-    static ggml_cuda_host_staging_pool pool;
+    static thread_local ggml_cuda_host_staging_pool pool;
     return pool;
 }
 
@@ -1958,19 +1958,23 @@ static cudaError_t ggml_cuda_copy_across_devices(
     }
 
     // Fallback: stage through pinned host memory via reusable pool
+    int prev_device = ggml_cuda_get_device();
     auto & pool = ggml_cuda_get_staging();
     cudaError_t err = pool.ensure(size);
     if (err != cudaSuccess) { return err; }
 
     ggml_cuda_set_device(src_device);
     err = cudaMemcpyAsync(pool.buf, src, size, cudaMemcpyDeviceToHost, src_stream);
-    if (err != cudaSuccess) { return err; }
+    if (err != cudaSuccess) { goto cleanup; }
 
     err = cudaStreamSynchronize(src_stream);
-    if (err != cudaSuccess) { return err; }
+    if (err != cudaSuccess) { goto cleanup; }
 
     ggml_cuda_set_device(dst_device);
     err = cudaMemcpyAsync(dst, pool.buf, size, cudaMemcpyHostToDevice, dst_stream);
+
+cleanup:
+    ggml_cuda_set_device(prev_device);
     return err;
 }
 
@@ -1994,6 +1998,7 @@ static cudaError_t ggml_cuda_copy2d_across_devices(
     }
 
     // Fallback: stage all rows through a single contiguous pinned buffer
+    int prev_device = ggml_cuda_get_device();
     auto & pool = ggml_cuda_get_staging();
     cudaError_t err = pool.ensure(width * height);
     if (err != cudaSuccess) { return err; }
@@ -2005,10 +2010,10 @@ static cudaError_t ggml_cuda_copy2d_across_devices(
             (char *)pool.buf + r * width,
             (const char *)src + r * spitch,
             width, cudaMemcpyDeviceToHost, src_stream);
-        if (err != cudaSuccess) { return err; }
+        if (err != cudaSuccess) { goto cleanup; }
     }
     err = cudaStreamSynchronize(src_stream);
-    if (err != cudaSuccess) { return err; }
+    if (err != cudaSuccess) { goto cleanup; }
 
     // Batch H2D for all rows
     ggml_cuda_set_device(dst_device);
@@ -2017,9 +2022,12 @@ static cudaError_t ggml_cuda_copy2d_across_devices(
             (char *)dst + r * dpitch,
             (char *)pool.buf + r * width,
             width, cudaMemcpyHostToDevice, dst_stream);
-        if (err != cudaSuccess) { return err; }
+        if (err != cudaSuccess) { goto cleanup; }
     }
     err = cudaStreamSynchronize(dst_stream);
+
+cleanup:
+    ggml_cuda_set_device(prev_device);
     return err;
 }
 
@@ -2261,11 +2269,21 @@ static void ggml_cuda_op_mul_mat(
                                 src0_extra->events[ctx.device][0], 0));
                         }
                         if (quantize_src1) {
-                            CUDA_CHECK(ggml_cuda_copy_across_devices(
-                                dev[id].src1_ddq + src1_ddq_i_offset, id,
-                                dev[ctx.device].src1_ddq + src1_ddq_i_offset, ctx.device,
-                                src1_ncols*src1_padded_col_size*q8_1_ts/q8_1_bs,
-                                stream, ctx.stream()));
+                            if (quantize_src1 == quantize_mmq_q8_1_cuda) {
+                                const size_t pitch = ne11*sizeof(block_q8_1_mmq);
+                                const size_t width = src1_ncols*sizeof(block_q8_1_mmq);
+                                const size_t height = src1_padded_col_size/(4*QK8_1);
+                                CUDA_CHECK(ggml_cuda_copy2d_across_devices(
+                                    dev[id].src1_ddq + src1_ddq_i_offset, id, pitch,
+                                    dev[ctx.device].src1_ddq + src1_ddq_i_offset, ctx.device, pitch,
+                                    width, height, stream, ctx.stream()));
+                            } else {
+                                CUDA_CHECK(ggml_cuda_copy_across_devices(
+                                    dev[id].src1_ddq + src1_ddq_i_offset, id,
+                                    dev[ctx.device].src1_ddq + src1_ddq_i_offset, ctx.device,
+                                    src1_ncols*src1_padded_col_size*q8_1_ts/q8_1_bs,
+                                    stream, ctx.stream()));
+                            }
                         } else {
                             float * dst_p = dev[id].src1_ddf + (i0*ne11 + src1_col_0) * ne10;
                             float * src_p = (float *) src1->data;
