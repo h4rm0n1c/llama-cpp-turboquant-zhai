@@ -43,7 +43,10 @@ def _apply_wifsignaled_patch(path: str) -> None:
     new = """    if (WIFEXITED(status)) {
       process->return_status = WEXITSTATUS(status);
     } else if (WIFSIGNALED(status)) {
-      process->return_status = -WTERMSIG(status);
+        // Store negated signal number so callers can distinguish signal death
+        // (e.g. -6 for SIGABRT from OOM, -15 for SIGTERM from force-kill) from
+        // normal error exit (positive exit code) and clean exit (exit code 0).
+        process->return_status = -WTERMSIG(status);
     } else {
       process->return_status = EXIT_FAILURE;
     }"""
@@ -58,6 +61,9 @@ def _apply_wifsignaled_patch(path: str) -> None:
     new = """    if (WIFEXITED(status)) {
         process->return_status = WEXITSTATUS(status);
       } else if (WIFSIGNALED(status)) {
+        // Store negated signal number so callers can distinguish signal death
+        // (e.g. -6 for SIGABRT from OOM, -15 for SIGTERM from force-kill) from
+        // normal error exit (positive exit code) and clean exit (exit code 0).
         process->return_status = -WTERMSIG(status);
       } else {
         process->return_status = EXIT_FAILURE;
