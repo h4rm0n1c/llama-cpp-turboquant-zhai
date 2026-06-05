@@ -352,12 +352,7 @@ static void common_params_fit_impl(
     }
 
     if (mparams->n_gpu_layers != default_mparams.n_gpu_layers) {
-        // User explicitly set n_gpu_layers (e.g. -ngl 999).  Don't try to fit
-        // GPU layers — respect the user's choice.  But we DID fit the context
-        // in step 2 above, so keep that.  Skip step 3+4 (GPU layer fitting).
-        LOG_WRN("%s: n_gpu_layers set by user to %d, skipping GPU layer fitting (context was fitted in step 2)\n",
-            __func__, mparams->n_gpu_layers);
-        return;
+        throw common_params_fit_exception("n_gpu_layers already set by user to " + std::to_string(mparams->n_gpu_layers) + ", abort");
     }
     if (nd > 1) {
         if (!tensor_split) {
