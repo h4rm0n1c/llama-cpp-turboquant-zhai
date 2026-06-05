@@ -99,7 +99,7 @@ struct server_model_meta {
         return is_signaled() ? -exit_code : 0;
     }
 
-    std::string last_error; // error message from CMD_CHILD_TO_ROUTER_ERROR or GGML_ABORT
+    std::string last_error = {}; // error message from CMD_CHILD_TO_ROUTER_ERROR or GGML_ABORT
 
     void update_args(common_preset_context & ctx_presets, std::string bin_path);
     void update_caps();
