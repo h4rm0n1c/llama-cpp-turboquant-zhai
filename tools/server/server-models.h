@@ -125,7 +125,6 @@ private:
 
     // for stopping models — separate mutex prevents cv_stop from contending
     // with update_status() on mutex (both used different critical sections).
-    // See PR #XXXX for the deadlock analysis.
     std::mutex stop_mutex;
     std::condition_variable cv_stop;
     std::set<std::string> stopping_models;
@@ -176,8 +175,6 @@ public:
     // update the status of a model instance (thread-safe)
     void update_status(const std::string & name, server_model_status status, int exit_code);
     void update_loaded_info(const std::string & name, std::string & raw_info);
-
-    // store a human-readable error message for a model instance (thread-safe)
     void update_last_error(const std::string & name, const std::string & error);
 
     // wait until the model instance is fully loaded (thread-safe)
