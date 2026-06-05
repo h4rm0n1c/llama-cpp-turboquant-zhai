@@ -876,6 +876,17 @@ void server_models::load(const std::string & name) {
             log_thread.join();
         }
 
+        // The log thread may have detected EOF on stdout (child hung up)
+        // without the child actually exiting — e.g. the client disconnected.
+        // In that case the stopping thread is still waiting on cv_stop
+        // because is_stopping() is false and subprocess_alive() is true.
+        // Kill the child here so the stopping thread unblocks and cleanup
+        // (subprocess_join/destroy) runs, freeing GPU memory.
+        if (subprocess_alive(child_proc.get())) {
+            SRV_WRN("model name=%s child still alive after log thread EOF, force-killing\n", name.c_str());
+            subprocess_terminate(child_proc.get());
+        }
+
         // stop the timeout monitoring thread
         {
             std::lock_guard<std::mutex> lk(this->stop_mutex);
