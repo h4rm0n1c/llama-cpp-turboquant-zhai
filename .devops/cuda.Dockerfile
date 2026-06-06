@@ -24,7 +24,9 @@ WORKDIR /app
 
 COPY . .
 
-RUN if [ "${CUDA_DOCKER_ARCH}" != "default" ]; then \
+ARG BUILD_TIMESTAMP=unknown
+RUN echo "build-id: ${BUILD_TIMESTAMP}" && \
+    if [ "${CUDA_DOCKER_ARCH}" != "default" ]; then \
     export CMAKE_ARGS="-DCMAKE_CUDA_ARCHITECTURES=${CUDA_DOCKER_ARCH}"; \
     fi && \
     cmake -B build -DGGML_NATIVE=OFF -DGGML_CUDA=ON -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON -DLLAMA_BUILD_TESTS=OFF ${CMAKE_ARGS} -DCMAKE_EXE_LINKER_FLAGS=-Wl,--allow-shlib-undefined . && \

@@ -2065,6 +2065,15 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_CACHE_TYPE_K"));
     add_opt(common_arg(
+        {"--cache-type-k-auto"},
+        {"--no-cache-type-k-auto"},
+        string_format("auto-select K cache type from model weight quantization (default: %s)",
+            params.cache_type_k_auto ? "true" : "false"),
+        [](common_params & params, bool value) {
+            params.cache_type_k_auto = value;
+        }
+    ));
+    add_opt(common_arg(
         {"-ctv", "--cache-type-v"}, "TYPE",
         string_format(
             "KV cache data type for V\n"

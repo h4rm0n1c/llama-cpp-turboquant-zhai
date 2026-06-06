@@ -524,6 +524,7 @@ struct llama_model {
     llm_arch arch = LLM_ARCH_UNKNOWN;
 
     std::string name = "n/a";
+    int ftype = -1; // GGUF general.file_type
 
     llama_hparams hparams = {};
     llama_vocab   vocab;
