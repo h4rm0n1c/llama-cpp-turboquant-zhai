@@ -1230,7 +1230,8 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
             recommended = GGML_TYPE_Q8_0;
         } else if (lower.find("q5_") != std::string::npos) {
             recommended = GGML_TYPE_Q4_0;
-        } else if (lower.find("q4_") != std::string::npos || lower.find("iq4") != std::string::npos) {
+        } else if (lower.find("apex") != std::string::npos ||
+                   lower.find("q4_") != std::string::npos || lower.find("iq4") != std::string::npos) {
             recommended = GGML_TYPE_Q4_0;
         } else if (lower.find("q3_") != std::string::npos || lower.find("q2_") != std::string::npos ||
                    lower.find("iq3") != std::string::npos || lower.find("iq2") != std::string::npos) {
