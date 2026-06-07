@@ -486,8 +486,9 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
             return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_0);
         }
 
-        // everything else
-        return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_MIRRORED);
+        // everything else — SPLIT_AXIS_0 distributes tensors across devices,
+        // avoiding OOM on the smallest GPU from mirrored copies
+        return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_0);
     };
 
     auto get_split_segments = [&](int axis, uint32_t il) -> std::vector<std::pair<int64_t, uint32_t>> {
