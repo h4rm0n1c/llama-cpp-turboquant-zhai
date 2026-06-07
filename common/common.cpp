@@ -1217,43 +1217,17 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
     // auto-select K cache type from model weight quantization
     if (params.cache_type_k_auto) {
         int ftype = llama_model_ftype(model);
-        ggml_type recommended = GGML_TYPE_Q4_0;
+        ggml_type recommended = GGML_TYPE_Q4_0; // Q4_0 is safe for all levels
 
-        // Map GGUF ftype to proportional K cache type
-        // High-bit models get Q8_0, mid-bit get Q4_0, low-bit get turbo variants
+        // Only use Q8_0 for high-bit models — everything else gets Q4_0.
+        // Turbo types are for V cache only; using them on K is experimental.
         switch (ftype) {
             case LLAMA_FTYPE_MOSTLY_Q8_0:
             case LLAMA_FTYPE_MOSTLY_Q6_K:
                 recommended = GGML_TYPE_Q8_0;
                 break;
-            case LLAMA_FTYPE_MOSTLY_Q5_0:
-            case LLAMA_FTYPE_MOSTLY_Q5_1:
-            case LLAMA_FTYPE_MOSTLY_Q5_K_S:
-            case LLAMA_FTYPE_MOSTLY_Q5_K_M:
-                recommended = GGML_TYPE_Q4_0;
-                break;
-            case LLAMA_FTYPE_MOSTLY_Q4_0:
-            case LLAMA_FTYPE_MOSTLY_Q4_1:
-            case LLAMA_FTYPE_MOSTLY_Q4_K_S:
-            case LLAMA_FTYPE_MOSTLY_Q4_K_M:
-            case LLAMA_FTYPE_MOSTLY_IQ4_NL:
-            case LLAMA_FTYPE_MOSTLY_IQ4_XS:
-                recommended = GGML_TYPE_Q4_0;
-                break;
-            case LLAMA_FTYPE_MOSTLY_Q2_K:
-            case LLAMA_FTYPE_MOSTLY_Q3_K_S:
-            case LLAMA_FTYPE_MOSTLY_Q3_K_M:
-            case LLAMA_FTYPE_MOSTLY_Q3_K_L:
-            case LLAMA_FTYPE_MOSTLY_IQ3_XXS:
-            case LLAMA_FTYPE_MOSTLY_IQ3_S:
-            case LLAMA_FTYPE_MOSTLY_IQ2_XXS:
-            case LLAMA_FTYPE_MOSTLY_IQ2_XS:
-            case LLAMA_FTYPE_MOSTLY_IQ2_S:
-                recommended = GGML_TYPE_TURBO4_0;
-                break;
             default:
-                // IQ1, TQx, or unknown — use turbo3
-                recommended = GGML_TYPE_TURBO3_0;
+                recommended = GGML_TYPE_Q4_0;
                 break;
         }
         if (cparams.type_k != recommended) {
