@@ -178,9 +178,6 @@ public:
     void update_loaded_info(const std::string & name, std::string & raw_info);
     void update_last_error(const std::string & name, const std::string & error);
 
-    // store a human-readable error message for a model instance (thread-safe)
-    void update_last_error(const std::string & name, const std::string & error);
-
     // wait until the model instance is fully loaded (thread-safe)
     // return when the model no longer in "loading" state
     void wait_until_loading_finished(const std::string & name);
