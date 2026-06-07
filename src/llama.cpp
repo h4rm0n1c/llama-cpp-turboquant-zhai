@@ -305,6 +305,14 @@ static std::pair<int, llama_model *> llama_model_load(struct gguf_context * meta
         model->hparams.vocab_only = params.vocab_only;
         model->hparams.no_alloc   = params.no_alloc;
 
+        // read ftype from GGUF metadata
+        {
+            int64_t kid = gguf_find_key(metadata, "general.file_type");
+            if (kid != -1) {
+                model->ftype = (int)gguf_get_val_u32(metadata, kid);
+            }
+        }
+
         try {
             model->load_hparams(ml);
         } catch(const std::exception & e) {

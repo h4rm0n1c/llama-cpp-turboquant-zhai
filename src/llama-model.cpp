@@ -2530,6 +2530,10 @@ int32_t llama_model_desc(const llama_model * model, char * buf, size_t buf_size)
     return snprintf(buf, buf_size, "%s", model->desc().c_str());
 }
 
+int32_t llama_model_ftype(const llama_model * model) {
+    return model->ftype;
+}
+
 uint64_t llama_model_size(const llama_model * model) {
     return model->size();
 }

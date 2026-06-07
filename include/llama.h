@@ -603,6 +603,9 @@ extern "C" {
     // Get a string describing the model type
     LLAMA_API int32_t llama_model_desc(const struct llama_model * model, char * buf, size_t buf_size);
 
+    // Returns the GGUF general.file_type (quantization format) of the model
+    LLAMA_API int32_t llama_model_ftype(const struct llama_model * model);
+
     // Returns the total size of all the tensors in the model in bytes
     LLAMA_API uint64_t llama_model_size(const struct llama_model * model);
 

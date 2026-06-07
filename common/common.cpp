@@ -1216,32 +1216,49 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
 
     // auto-select K cache type from model weight quantization
     if (params.cache_type_k_auto) {
-        // Check filename first (most reliable: "Qwen-9B-Q4_K_M.gguf")
-        std::string fname = params.model.path;
-        // If filename doesn't contain quant info, try model description
-        char desc_buf[128];
-        llama_model_desc(model, desc_buf, sizeof(desc_buf));
-        std::string src = fname + " " + std::string(desc_buf);
-        std::string lower;
-        for (auto c : src) lower += tolower(c);
+        int ftype = llama_model_ftype(model);
+        ggml_type recommended = GGML_TYPE_Q4_0;
 
-        ggml_type recommended = GGML_TYPE_Q4_0; // safe default for 4-bit weights
-        if (lower.find("q8_0") != std::string::npos || lower.find("q6_k") != std::string::npos) {
-            recommended = GGML_TYPE_Q8_0;
-        } else if (lower.find("q5_") != std::string::npos) {
-            recommended = GGML_TYPE_Q4_0;
-        } else if (lower.find("apex") != std::string::npos ||
-                   lower.find("q4_") != std::string::npos || lower.find("iq4") != std::string::npos) {
-            recommended = GGML_TYPE_Q4_0;
-        } else if (lower.find("q3_") != std::string::npos || lower.find("q2_") != std::string::npos ||
-                   lower.find("iq3") != std::string::npos || lower.find("iq2") != std::string::npos) {
-            recommended = GGML_TYPE_TURBO4_0;
-        } else {
-            recommended = GGML_TYPE_TURBO3_0;
+        // Map GGUF ftype to proportional K cache type
+        // High-bit models get Q8_0, mid-bit get Q4_0, low-bit get turbo variants
+        switch (ftype) {
+            case LLAMA_FTYPE_MOSTLY_Q8_0:
+            case LLAMA_FTYPE_MOSTLY_Q6_K:
+                recommended = GGML_TYPE_Q8_0;
+                break;
+            case LLAMA_FTYPE_MOSTLY_Q5_0:
+            case LLAMA_FTYPE_MOSTLY_Q5_1:
+            case LLAMA_FTYPE_MOSTLY_Q5_K_S:
+            case LLAMA_FTYPE_MOSTLY_Q5_K_M:
+                recommended = GGML_TYPE_Q4_0;
+                break;
+            case LLAMA_FTYPE_MOSTLY_Q4_0:
+            case LLAMA_FTYPE_MOSTLY_Q4_1:
+            case LLAMA_FTYPE_MOSTLY_Q4_K_S:
+            case LLAMA_FTYPE_MOSTLY_Q4_K_M:
+            case LLAMA_FTYPE_MOSTLY_IQ4_NL:
+            case LLAMA_FTYPE_MOSTLY_IQ4_XS:
+                recommended = GGML_TYPE_Q4_0;
+                break;
+            case LLAMA_FTYPE_MOSTLY_Q2_K:
+            case LLAMA_FTYPE_MOSTLY_Q3_K_S:
+            case LLAMA_FTYPE_MOSTLY_Q3_K_M:
+            case LLAMA_FTYPE_MOSTLY_Q3_K_L:
+            case LLAMA_FTYPE_MOSTLY_IQ3_XXS:
+            case LLAMA_FTYPE_MOSTLY_IQ3_S:
+            case LLAMA_FTYPE_MOSTLY_IQ2_XXS:
+            case LLAMA_FTYPE_MOSTLY_IQ2_XS:
+            case LLAMA_FTYPE_MOSTLY_IQ2_S:
+                recommended = GGML_TYPE_TURBO4_0;
+                break;
+            default:
+                // IQ1, TQx, or unknown — use turbo3
+                recommended = GGML_TYPE_TURBO3_0;
+                break;
         }
         if (cparams.type_k != recommended) {
-            LOG_INF("%s: auto-selected K cache type %s (was %s)\n",
-                __func__, ggml_type_name(recommended), ggml_type_name(cparams.type_k));
+            LOG_INF("%s: auto-selected K cache type %s for ftype=%d (was %s)\n",
+                __func__, ggml_type_name(recommended), ftype, ggml_type_name(cparams.type_k));
             cparams.type_k = recommended;
         }
     }
