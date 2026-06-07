@@ -19,6 +19,7 @@ RUN apt-get update && \
     apt-get install -y gcc-14 g++-14 build-essential cmake python3 python3-pip git libssl-dev libgomp1
 
 ENV CC=gcc-14 CXX=g++-14 CUDAHOSTCXX=g++-14
+ENV GGML_CUDA_P2P=1
 
 WORKDIR /app
 
@@ -105,6 +106,7 @@ ENTRYPOINT [ "/app/llama-cli" ]
 FROM base AS server
 
 ENV LLAMA_ARG_HOST=0.0.0.0
+ENV GGML_CUDA_P2P=1
 
 COPY --from=build /app/full/llama-server /app
 
