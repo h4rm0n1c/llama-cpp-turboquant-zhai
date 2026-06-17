@@ -97,7 +97,6 @@ int llama_server(int argc, char ** argv) {
         // stdout before abort() kills the process.  The parent's log thread
         // (in router mode) reads stdout via a pipe and parses
         // CMD_CHILD_TO_ROUTER_ERROR to capture the error for /v1/models.
-<<<<<<< HEAD
         // This catches ALL GGML_ABORT paths — CUDA OOM, GGML_ASSERT
         // failures, unsupported ops, etc.  fflush(stdout) is essential:
         // abort() does not flush stdio buffers.
@@ -105,12 +104,6 @@ int llama_server(int argc, char ** argv) {
             // Flatten multi-line messages so the fgets parser captures
             // the full error, not just the first line.
             // Use a fixed buffer to avoid std::string dependency.
-=======
-        // fflush(stdout) is essential: abort() does not flush stdio buffers.
-        ggml_set_abort_callback([](const char * msg) {
-            // Flatten multi-line messages so the fgets parser captures
-            // the full error, not just the first line.
->>>>>>> TheTom/feature/turboquant-kv-cache
             char flat[4096];
             size_t i;
             for (i = 0; i < sizeof(flat) - 1 && msg[i]; i++) {

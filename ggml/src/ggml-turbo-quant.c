@@ -594,7 +594,7 @@ void dequantize_row_turbo4_0(const block_turbo4_0 * GGML_RESTRICT x, float * GGM
         }
         /* No inverse WHT, dequant stays in the rotated domain.
         * Q is WHT-rotated by the graph, so <Q_rot, K_rot> gives correct attention scores.
-        * The inverse WHT is applied to the attention output via GGML_OP_TURBO_WHT (direction=1) in the graph. 
+        * The inverse WHT is applied to the attention output via GGML_OP_TURBO_WHT (direction=1) in the graph.
         */
     }
 #else
