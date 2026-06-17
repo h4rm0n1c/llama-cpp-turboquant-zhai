@@ -553,8 +553,20 @@ class _Qwen35MtpMixin:
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.block_count = self.hparams["num_hidden_layers"]
-        if not self.no_mtp:
-            self.block_count += self.hparams.get("mtp_num_hidden_layers", 0)
+        mtp_layers = self.hparams.get("mtp_num_hidden_layers", 0)
+        if not self.no_mtp and mtp_layers > 0:
+            # Some configs carry mtp_num_hidden_layers from the base architecture
+            # but the actual checkpoint may not have MTP tensors trained.
+            # Check if any "mtp" tensors actually exist in the model files.
+            has_mtp_tensors = any("mtp" in key for key in self.model_tensors)
+            if not has_mtp_tensors:
+                logger.warning(
+                    f"config has mtp_num_hidden_layers={mtp_layers} "
+                    f"but no MTP tensors found in checkpoint — disabling MTP"
+                )
+                self.no_mtp = True
+            else:
+                self.block_count += mtp_layers
         self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
 
     def index_tensors(self, remote_hf_model_id: str | None = None) -> dict[str, Callable[[], Tensor]]:
