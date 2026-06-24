@@ -1217,12 +1217,12 @@ static __global__ void k_set_rows_q4_0(
     const uint8_t q = min(15, (uint8_t)(xf + 8.5f));
 
     // ---- Step 5: Nibble pack via warp shuffle ----
-    // Pair threads (even/odd): odd thread's nibble goes in upper 4 bits
+    // q4_0 format: byte j = nibble(element j) | nibble(element j+16) << 4
+    // Pair threads (j, j+16) via j ^ 16.  Only j=0..15 write.
     const uint8_t my_nibble = q & 0x0F;
-    const uint8_t partner_nibble = __shfl_sync(0xffffffff, my_nibble, j ^ 1);
-    const int byte_idx = j / 2;
-    if (j % 2 == 0) {
-        blk->qs[byte_idx] = my_nibble | (partner_nibble << 4);
+    const uint8_t partner_nibble = __shfl_sync(0xffffffff, my_nibble, j ^ 16);
+    if (j < 16) {
+        blk->qs[j] = my_nibble | (partner_nibble << 4);
     }
 
     // ---- Step 6: Write scale ----
