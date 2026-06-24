@@ -1203,31 +1203,13 @@ static __global__ void k_set_rows_q4_0(
         amax = fmaxf(amax, __shfl_xor_sync(0xffffffff, amax, offset));
     }
 
-    // ---- Step 3: Thread 0 computes scale d = vmax / -8 ----
-    // Scale is based on the signed max (vmax), not amax.
-    // vmax is the element with max |value|, preserving its sign.
-    // Use shuffle to get the actual value from the thread that had amax.
-    __shared__ float s_d;
-    if (j == 0) {
-        // Find which lane had the max — it's the last one in the reduce chain
-        // Simple approach: scan all values through shared memory
-        // More efficient: __shfl to broadcast candidate, track lane
-        // Since j==0 is the only writer, use the value from lane 0 as proxy
-        // If amax came from a different lane, use __shfl to find vmax
-        float vmax = val;
-        float cur_amax = fabsf(vmax);
-        for (int offset = 1; offset < WARP_SIZE; offset++) {
-            float candidate = __shfl_sync(0xffffffff, val, offset);
-            float camax = fabsf(candidate);
-            if (camax > cur_amax) {
-                cur_amax = camax;
-                vmax = candidate;
-            }
-        }
-        s_d = vmax / -8.0f;
-    }
-    __syncthreads();
-    const float d = s_d;
+    // ---- Step 3: Find signed vmax and compute scale d = vmax / -8 ----
+    // amax is now the same in all lanes.  Find the lowest lane whose |val| == amax,
+    // then broadcast its signed value.  This avoids divergent __shfl_sync.
+    unsigned int has_max = (fabsf(val) == amax) ? 0xffffffffu : 0u;
+    unsigned int lowest = __ffs(__ballot_sync(0xffffffff, has_max)) - 1;
+    const float vmax = __shfl_sync(0xffffffff, val, lowest);
+    const float d = vmax / -8.0f;
 
     // ---- Step 4: Scale and quantize ----
     const float id = d != 0.0f ? 1.0f / d : 0.0f;
