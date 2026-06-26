@@ -988,6 +988,13 @@ void server_models::load(const std::string & name, const load_options & opts) {
             log_thread.join();
         }
 
+        // EOF on stdout — child process exited (could be a crash).
+        // Immediately mark UNLOADED so /v1/models stops advertising
+        // this model as loaded while we wait for subprocess_join.
+        if (stdout_file && feof(stdout_file)) {
+            this->update_status(name, { SERVER_MODEL_STATUS_UNLOADED, 1 });
+        }
+
         // The log thread may have detected EOF on stdout (child hung up)
         // without the child actually exiting — e.g. the client disconnected.
         // In that case the stopping thread is still waiting on cv_stop
@@ -1022,6 +1029,23 @@ void server_models::load(const std::string & name, const load_options & opts) {
                 SERVER_MODEL_STATUS_UNLOADED,
                 exit_code
             });
+        }
+
+        // auto-recover from transient crashes
+        if (exit_code != 0 && exit_code != -15 /* SIGTERM = force-kill */) {
+            std::lock_guard<std::mutex> _lk(this->mutex);
+            auto _it = this->mapping.find(name);
+            if (_it != this->mapping.end() && _it->second.meta.reload_attempts < server_model_meta::MAX_RELOAD_ATTEMPTS) {
+                SRV_WRN("model name=%s crashed (exit_code=%d), auto-recovering (attempt %d/%d)...\n",
+                    name.c_str(), exit_code,
+                    _it->second.meta.reload_attempts + 1,
+                    server_model_meta::MAX_RELOAD_ATTEMPTS);
+                _it->second.meta.recovering = true;
+                _it->second.meta.reload_attempts++;
+            } else if (_it != this->mapping.end()) {
+                SRV_ERR("model name=%s crashed (exit_code=%d), max retries (%d) reached — permanent failure\n",
+                    name.c_str(), exit_code, server_model_meta::MAX_RELOAD_ATTEMPTS);
+            }
         }
         SRV_INF("instance name=%s exited with status %d\n", name.c_str(), exit_code);
     });
@@ -1177,32 +1201,23 @@ void server_models::update_last_error(const std::string & name, const std::strin
 }
 
 void server_models::wait_until_loading_finished(const std::string & name) {
+    int timeout_sec = 300;
     std::unique_lock<std::mutex> lk(mutex);
-    cv.wait(lk, [this, &name]() {
+    if (!cv.wait_for(lk, std::chrono::seconds(timeout_sec), [this, &name]() {
         auto it = mapping.find(name);
         if (it != mapping.end()) {
-            if (done) {
-                // mark the instance to be erased on next load_models() call
-                it->second.meta.status = SERVER_MODEL_STATUS_DOWNLOADED;
-                need_reload = true;
-            } else {
-                json & info = it->second.meta.loaded_info;
-                if (!info.contains("progress")) {
-                    info["progress"] = json{};
-                }
-                info["progress"][progress.url] = {
-                    {"done",  progress.downloaded},
-                    {"total", progress.total},
-                };
-                curr = it->second.meta.loaded_info; // copy
-            }
+            return it->second.meta.status != SERVER_MODEL_STATUS_LOADING;
         }
-    }
-    if (done) {
-        cv.notify_all(); // notify in case unload() is waiting for download to be cancelled
-        notify_sse(ok ? "download_finished" : "download_failed", name, {});
-    } else {
-        notify_sse("download_progress", name, curr);
+        return false;
+    })) {
+        // Timeout — model loading hung. Transition to UNLOADED with exit_code=1
+        SRV_WRN("model name=%s loading timed out after %ds, marking unloaded\n", name.c_str(), timeout_sec);
+        auto it = mapping.find(name);
+        if (it != mapping.end()) {
+            it->second.meta.status    = SERVER_MODEL_STATUS_UNLOADED;
+            it->second.meta.exit_code = 1;
+        }
+        cv.notify_all();
     }
 }
 
@@ -1410,6 +1425,15 @@ void server_models::handle_child_state(const std::string & name, const std::stri
                     payload.size() > 0 ? payload : nullptr,
                     {}, // reset progress info
                 });
+                // clear auto-recovery state on successful load
+                {
+                    std::lock_guard<std::mutex> _lk(mutex);
+                    auto _it = mapping.find(name);
+                    if (_it != mapping.end()) {
+                        _it->second.meta.recovering = false;
+                        _it->second.meta.reload_attempts = 0;
+                    }
+                }
             } break;
         case SERVER_STATE_SLEEPING:
             {
@@ -1780,6 +1804,9 @@ void server_models_routes::init_routes() {
                 if (meta.is_signaled()) {
                     status["exit_signal"] = meta.exit_signal();
                 }
+            }
+            if (meta.recovering) {
+                status["recovering"] = true;
             }
             if (!meta.last_error.empty()) {
                 status["last_error"] = meta.last_error;

@@ -118,6 +118,9 @@ struct server_model_meta {
     }
 
     std::string last_error = {}; // error message from CMD_CHILD_TO_ROUTER_ERROR or GGML_ABORT
+    bool recovering = false;     // auto-recover in progress after crash
+    int reload_attempts = 0;     // current retry count since last successful load
+    static constexpr int MAX_RELOAD_ATTEMPTS = 3;
 
     void update_args(common_preset_context & ctx_presets, std::string bin_path);
     void update_caps();
