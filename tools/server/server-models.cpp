@@ -46,8 +46,7 @@ extern char **environ;
 
 #define DEFAULT_STOP_TIMEOUT 10 // seconds
 
-#define CMD_ROUTER_TO_CHILD_EXIT  "cmd_router_to_child:exit"
-#define CMD_CHILD_TO_ROUTER_STATE "cmd_child_to_router:state:" // followed by json string
+// CMD defines moved to server-models.h
 
 // address for child process, this is needed because router may run on 0.0.0.0
 // ref: https://github.com/ggml-org/llama.cpp/issues/17862
@@ -952,7 +951,7 @@ void server_models::load(const std::string & name, const load_options & opts) {
                 return this->stopping_models.find(name) != this->stopping_models.end();
             };
             {
-                std::unique_lock<std::mutex> lk(this->mutex);
+                std::unique_lock<std::mutex> lk(this->stop_mutex);
                 this->cv_stop.wait(lk, [&]() {
                     return is_stopping() || child_proc->stopped.load(std::memory_order_acquire);
                 });
@@ -966,7 +965,7 @@ void server_models::load(const std::string & name, const load_options & opts) {
             fflush(stdin_file);
             int64_t start_time = ggml_time_ms();
             while (true) {
-                std::unique_lock<std::mutex> lk(this->mutex);
+                std::unique_lock<std::mutex> lk(this->stop_mutex);
                 if (!is_stopping() || child_proc->stopped.load(std::memory_order_acquire)) {
                     return;
                 }
@@ -989,9 +988,20 @@ void server_models::load(const std::string & name, const load_options & opts) {
             log_thread.join();
         }
 
+        // The log thread may have detected EOF on stdout (child hung up)
+        // without the child actually exiting — e.g. the client disconnected.
+        // In that case the stopping thread is still waiting on cv_stop
+        // because is_stopping() is false and subprocess_alive() is true.
+        // Kill the child here so the stopping thread unblocks and cleanup
+        // (subprocess_join/destroy) runs, freeing GPU memory.
+        if (subprocess_alive(child_proc.get())) {
+            SRV_WRN("model name=%s child still alive after log thread EOF, force-killing\n", name.c_str());
+            subprocess_terminate(child_proc.get());
+        }
+
         child_proc->stopped.store(true, std::memory_order_release);
         {
-            std::lock_guard<std::mutex> lk(this->mutex);
+            std::lock_guard<std::mutex> lk(this->stop_mutex);
             stopping_models.erase(name);
             cv_stop.notify_all();
         }
@@ -1050,13 +1060,16 @@ void server_models::unload(const std::string & name) {
             });
         } else if (it->second.meta.is_running()) {
             SRV_INF("stopping model instance name=%s\n", name.c_str());
-            stopping_models.insert(name);
+            {
+                std::lock_guard<std::mutex> lk2(stop_mutex);
+                stopping_models.insert(name);
+                cv_stop.notify_all();
+            }
             if (it->second.meta.status == SERVER_MODEL_STATUS_LOADING) {
                 // special case: if model is in loading state, unloading means force-killing it
                 SRV_WRN("model name=%s is still loading, force-killing\n", name.c_str());
                 it->second.subproc->terminate();
             }
-            cv_stop.notify_all();
             // status change will be handled by the managing thread
         } else {
             SRV_WRN("model instance name=%s is not running\n", name.c_str());
@@ -1068,6 +1081,7 @@ void server_models::unload_all() {
     std::vector<std::thread> to_join;
     {
         std::lock_guard<std::mutex> lk(mutex);
+        std::lock_guard<std::mutex> lk2(stop_mutex);
         for (auto & [name, inst] : mapping) {
             if (inst.meta.status == SERVER_MODEL_STATUS_DOWNLOADING) {
                 SRV_INF("cancelling download for model name=%s\n", name.c_str());
@@ -1127,6 +1141,44 @@ void server_models::update_download_progress(const std::string & name, const com
     json curr;
     {
         std::lock_guard<std::mutex> lk(mutex);
+        auto it = mapping.find(name);
+        if (it != mapping.end()) {
+            if (done) {
+                // mark the instance to be erased on next load_models() call
+                it->second.meta.status = SERVER_MODEL_STATUS_DOWNLOADED;
+                need_reload = true;
+            } else {
+                json & info = it->second.meta.loaded_info;
+                if (!info.contains("progress")) {
+                    info["progress"] = json{};
+                }
+                info["progress"][progress.url] = {
+                    {"done",  progress.downloaded},
+                    {"total", progress.total},
+                };
+                curr = it->second.meta.loaded_info; // copy
+            }
+        }
+    }
+    if (done) {
+        cv.notify_all(); // notify in case unload() is waiting for download to be cancelled
+        notify_sse(ok ? "download_finished" : "download_failed", name, {});
+    } else {
+        notify_sse("download_progress", name, curr);
+    }
+}
+
+void server_models::update_last_error(const std::string & name, const std::string & error) {
+    std::unique_lock<std::mutex> lk(mutex);
+    auto it = mapping.find(name);
+    if (it != mapping.end()) {
+        it->second.meta.last_error = error;
+    }
+}
+
+void server_models::wait_until_loading_finished(const std::string & name) {
+    std::unique_lock<std::mutex> lk(mutex);
+    cv.wait(lk, [this, &name]() {
         auto it = mapping.find(name);
         if (it != mapping.end()) {
             if (done) {
@@ -1725,6 +1777,12 @@ void server_models_routes::init_routes() {
             if (meta.is_failed()) {
                 status["exit_code"] = meta.exit_code;
                 status["failed"]    = true;
+                if (meta.is_signaled()) {
+                    status["exit_signal"] = meta.exit_signal();
+                }
+            }
+            if (!meta.last_error.empty()) {
+                status["last_error"] = meta.last_error;
             }
 
             // pi coding agent multimodal compatibility
