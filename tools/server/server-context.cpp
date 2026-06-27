@@ -17,6 +17,9 @@
 #include "mtmd.h"
 #include "mtmd-helper.h"
 
+// TODO: tmp until the mtmd draft processing is refactored [TAG_MTMD_DRAFT_PROCESSING]
+#include "../../src/llama-ext.h"
+
 #include <algorithm>
 #include <cstddef>
 #include <cinttypes>
@@ -3432,6 +3435,17 @@ private:
                             send_error(slot, "failed to process image", ERROR_TYPE_SERVER);
                             slot.release();
                             continue;
+                        }
+
+                        if (slot.ctx_dft && llama_get_ctx_other(slot.ctx_dft) != slot.ctx_tgt) {
+                            // TODO: in the future, figure out how to infuse target embeddings to the images
+                            //       for now, we skip this for simplicity
+                            //       maybe we simply need to call `common_speculative_process()` on the mtmd batches in the `process_chunk` above?
+                            //       [TAG_MTMD_DRAFT_PROCESSING]
+                            res = input_tokens.process_chunk(slot.ctx_dft, slot.mctx, slot.prompt.n_tokens(), slot.prompt.tokens.pos_next(), slot.id, n_tokens_out);
+                            if (res != 0) {
+                                GGML_ABORT("failed to process multi-modal data on draft context\n");
+                            }
                         }
 
                         slot.n_prompt_tokens_processed += n_tokens_out;
