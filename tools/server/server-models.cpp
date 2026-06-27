@@ -1001,9 +1001,9 @@ void server_models::load(const std::string & name, const load_options & opts) {
         // because is_stopping() is false and subprocess_alive() is true.
         // Kill the child here so the stopping thread unblocks and cleanup
         // (subprocess_join/destroy) runs, freeing GPU memory.
-        if (subprocess_alive(child_proc.get())) {
+        if (child_proc->is_alive()) {
             SRV_WRN("model name=%s child still alive after log thread EOF, force-killing\n", name.c_str());
-            subprocess_terminate(child_proc.get());
+            child_proc->terminate();
         }
 
         child_proc->stopped.store(true, std::memory_order_release);

@@ -18,7 +18,10 @@
 
 // Signals between router parent and model child processes.
 // Also used by server.cpp (the child process entry point).
+// Signals between router parent and model child processes.
+// Also used by server.cpp (the child process entry point).
 #define CMD_ROUTER_TO_CHILD_EXIT  "cmd_router_to_child:exit"
+#define CMD_CHILD_TO_ROUTER_STATE "cmd_child_to_router:state:" // unified state json, followed by json string
 #define CMD_CHILD_TO_ROUTER_READY "cmd_child_to_router:ready"
 #define CMD_CHILD_TO_ROUTER_SLEEP "cmd_child_to_router:sleep"
 #define CMD_CHILD_TO_ROUTER_INFO  "cmd_child_to_router:info:"
@@ -258,6 +261,7 @@ public:
     // also send SSE notification to /models/sse endpoint
     void update_status(const std::string & name, const update_status_args & args);
     void update_last_error(const std::string & name, const std::string & error);
+    void wait_until_loading_finished(const std::string & name);
     void update_download_progress(const std::string & name, const common_download_progress & progress, bool done, bool ok = true);
 
     // remove a cache model from disk and update the list (thread-safe)
