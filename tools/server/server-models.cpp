@@ -1201,7 +1201,10 @@ void server_models::update_last_error(const std::string & name, const std::strin
 }
 
 void server_models::wait_until_loading_finished(const std::string & name) {
-    int timeout_sec = 300;
+    int timeout_sec = base_params.model_load_timeout;
+    if (timeout_sec < 1) {
+        timeout_sec = 300; // safety floor
+    }
     std::unique_lock<std::mutex> lk(mutex);
     if (!cv.wait_for(lk, std::chrono::seconds(timeout_sec), [this, &name]() {
         auto it = mapping.find(name);
